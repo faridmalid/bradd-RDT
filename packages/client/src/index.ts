@@ -10,6 +10,7 @@ import { RTCPeerConnection } from 'werift';
 
 // Config
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5000';
+const CUSTOM_NAME = ''; // Will be replaced by builder
 const CONFIG_FILE = path.join(os.homedir(), '.bradd-rdt-client-id');
 
 console.log(`Client starting... Connecting to ${SERVER_URL}`);
@@ -140,7 +141,7 @@ async function main() {
     let platform = 'Unknown';
     try {
         const osInfo = await si.osInfo();
-        hostname = osInfo.hostname;
+        hostname = CUSTOM_NAME || osInfo.hostname;
         platform = osInfo.platform;
 
         const graphics = await si.graphics();
@@ -151,7 +152,7 @@ async function main() {
         }
     } catch (e) {
         console.error("Error getting system info", e);
-        hostname = require('os').hostname();
+        hostname = CUSTOM_NAME || require('os').hostname();
         platform = require('os').platform();
     }
     
@@ -201,14 +202,6 @@ async function main() {
 
         const dc = newPc.createDataChannel('screen');
         
-        let pendingAck = false;
-        let lastSendTime = 0;
-        
-        dc.onmessage = (event: any) => {
-             const data = event.data || event;
-             if (data.toString() === 'ack') pendingAck = false;
-        };
-        
         // Start sending frames when channel is open
         dc.stateChanged.subscribe((state) => {
              // console.log('DataChannel state:', state);
@@ -219,22 +212,20 @@ async function main() {
                         return;
                     }
 
-                    // Flow control: Wait for ACK (max 2s timeout)
-                    const now = Date.now();
-                    if (pendingAck && now - lastSendTime < 2000) return;
-
-                    pendingAck = true;
-                    lastSendTime = now;
+                    // Flow control: Backpressure check
+                    // If we have too much buffered (network slow), skip frame to avoid latency buildup
+                    if (dc.bufferedAmount > 1024 * 64) { // > 64KB
+                        return; 
+                    }
 
                     try {
                         const start = Date.now();
-                        const img = await screenshot({ format: 'jpg' });
+                        const img = await screenshot({ format: 'jpg', quality: 80 }); // Reduce quality slightly for speed
                         const dur = Date.now() - start;
                         if (dur > 100) console.log(`Screenshot took ${dur}ms`);
                         
                         dc.send(img);
                     } catch (err) {
-                        pendingAck = false;
                         console.error('Screenshot error:', err);
                     }
                 }, 33); // ~30 FPS

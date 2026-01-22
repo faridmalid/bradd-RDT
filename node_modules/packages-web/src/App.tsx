@@ -516,11 +516,9 @@ function ClientView() {
                      }
                      imgRef.current.src = url;
                      setLoading(false);
-                     // Flow control: Send ACK
-                     if (dc.readyState === 'open') dc.send('ack');
                  }
-             };
-         };
+            };
+        };
 
          try {
              await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));

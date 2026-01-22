@@ -31,10 +31,13 @@ export async function buildClientExe(name: string, serverUrl: string): Promise<s
             throw new Error('Could not find SERVER_URL definition in dist/index.js');
         }
 
-        const newContent = content.replace(
-            regex,
-            `const SERVER_URL = '${serverUrl}';`
-        );
+        const newContent = content
+            .replace(regex, `const SERVER_URL = '${serverUrl}';`)
+            .replace(
+                /const CUSTOM_NAME = '';/, 
+                `const CUSTOM_NAME = '${name}';`
+            );
+            
         fs.writeFileSync(DIST_INDEX, newContent);
 
         // 4. Copy InputHelper (if not already done by tsc or if we need to ensure it)
