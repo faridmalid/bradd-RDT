@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
