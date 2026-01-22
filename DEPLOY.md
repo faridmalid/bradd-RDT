@@ -47,12 +47,12 @@ This guide will help you deploy the Bradd RDT application to a Virtual Private S
     ```
 
 5.  **Access the Application**:
-    Open your browser and navigate to `http://<YOUR_VPS_IP>:3000`.
+    Open your browser and navigate to `http://<YOUR_VPS_IP>:5174`.
 
 ## Configuration (Optional)
 
 ### Running on Port 80 (HTTP)
-You can redirect port 80 to 3000 or use Nginx as a reverse proxy.
+You can redirect port 80 to 5174 or use Nginx as a reverse proxy.
 
 **Using Nginx (Recommended):**
 1.  Install Nginx: `sudo apt install nginx`
@@ -63,7 +63,7 @@ You can redirect port 80 to 3000 or use Nginx as a reverse proxy.
         server_name your-domain.com; # or your IP
 
         location / {
-            proxy_pass http://localhost:3000;
+            proxy_pass http://localhost:5174;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
@@ -80,13 +80,13 @@ You can redirect port 80 to 3000 or use Nginx as a reverse proxy.
     ```
 
 ### WebRTC & Firewall
--   Ensure **TCP port 3000** (or 80 if using Nginx) is open.
+-   Ensure **TCP port 5174** (or 80 if using Nginx) is open.
 -   WebRTC uses random UDP ports for direct connection. If behind strict NAT, you might need a TURN server.
 -   The current setup uses Google's public STUN server which works for most direct connections.
 
 ## Building Clients
 Once deployed, go to the **Client Builder** page in the web dashboard.
 -   Enter the **Client Name**.
--   Enter the **Server URL** (e.g., `http://<YOUR_VPS_IP>:3000` or `http://your-domain.com`).
+-   Enter the **Server URL** (e.g., `http://<YOUR_VPS_IP>:5174` or `http://your-domain.com`).
 -   Click **Build**.
 -   Download and run the `.exe` on the target Windows machine.

@@ -17,13 +17,13 @@ const io = new Server(httpServer, {
 
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 app.use('/downloads', express.static(path.join(__dirname, '../../client/build')));
 
-// Serve static frontend files (production)
-const webBuildPath = path.join(__dirname, '../../web/dist');
-app.use(express.static(webBuildPath));
-
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 // Initialize DB
 initDB().then(() => console.log('Database initialized'));
@@ -58,11 +58,18 @@ const clientSocketMap: Record<string, string> = {}; // DB ID -> SocketID
 
 // Login
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
-  const db = getDB();
-  const user = await db.get('SELECT * FROM users WHERE username = ? AND password = ?', username, password);
-  
-  if (user) {
+    const { username, password } = req.body;
+    
+    const db = getDB();
+    if (!db) {
+        console.error('Database not initialized');
+        res.status(500).json({ error: 'Database not initialized' });
+        return;
+    }
+
+    const user = await db.get('SELECT * FROM users WHERE username = ? AND password = ?', username, password);
+
+    if (user) {
     res.json({ token: 'mock-token', user: { id: user.id, username: user.username } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
@@ -181,6 +188,8 @@ async function notifyAdmins() {
 
 // Socket.io
 io.on('connection', (socket) => {
+  console.log(`[${new Date().toISOString()}] New Socket Connection: ${socket.id}`);
+  
   // Identify as Client (The Remote Machine)
   socket.on('register-client', async (data: { hostname: string, platform: string, id?: string }) => {
     const db = getDB();
@@ -280,6 +289,43 @@ io.on('connection', (socket) => {
       }
   });
 
+  socket.on('start-term', (data: { target: string }) => {
+      const targetSocket = clientSocketMap[data.target];
+      if (targetSocket) {
+          io.to(targetSocket).emit('start-term', { requester: socket.id });
+      }
+  });
+
+  socket.on('term-data', (data: any) => {
+      // If from client, send to admin (requester?)
+      // We need to know who is the admin for this client session.
+      // For now, broadcast to 'admins' room or track session.
+      // Simplest: Client sends to server, server broadcasts to admins.
+      // Or: Client sends { target: adminId, data }? 
+      // Current client implementation sends just data.
+      // Let's assume client sends just data and we broadcast to admins (since admins room exists).
+      // Ideally, we should target specific admin.
+      
+      // If data is string, it's from client -> admin
+      if (typeof data === 'string') {
+          io.to('admins').emit('term-data', { source: socket.id, data });
+      } 
+      // If object { target, data }, it's from admin -> client
+      else if (typeof data === 'object' && data.target) {
+           const targetSocket = clientSocketMap[data.target];
+           if (targetSocket) {
+               io.to(targetSocket).emit('term-input', data.data);
+           }
+      }
+  });
+
+  socket.on('term-resize', (data: { target: string, cols: number, rows: number }) => {
+       const targetSocket = clientSocketMap[data.target];
+       if (targetSocket) {
+           io.to(targetSocket).emit('term-resize', { cols: data.cols, rows: data.rows });
+       }
+  });
+
   socket.on('command', (data: { target: string, command: string }) => {
       const targetSocket = clientSocketMap[data.target];
       if (targetSocket) {
@@ -289,14 +335,23 @@ io.on('connection', (socket) => {
 
   // Start/Stop Stream (Trigger WebRTC negotiation or fallback)
   socket.on('start-stream', (data: { target: string }) => {
+      console.log(`Received start-stream request for ${data.target} from ${socket.id}`);
       const targetSocket = clientSocketMap[data.target];
       if (targetSocket) {
+          console.log(`Forwarding start-stream to ${targetSocket}`);
           io.to(targetSocket).emit('start-stream', { requester: socket.id });
+      } else {
+          console.warn(`Target client ${data.target} not found or offline`);
       }
   });
 
 
 });
+
+// Serve static frontend files (production)
+// Place this AFTER API routes so they take precedence
+const webBuildPath = path.join(__dirname, '../../web/dist');
+app.use(express.static(webBuildPath));
 
 // SPA Fallback (Must be last)
 app.get('*', (req, res) => {

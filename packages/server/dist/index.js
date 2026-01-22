@@ -24,7 +24,7 @@ app.use('/downloads', express_1.default.static(path_1.default.join(__dirname, '.
 // Serve static frontend files (production)
 const webBuildPath = path_1.default.join(__dirname, '../../web/dist');
 app.use(express_1.default.static(webBuildPath));
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5174;
 // Initialize DB
 (0, db_1.initDB)().then(() => console.log('Database initialized'));
 // Build API

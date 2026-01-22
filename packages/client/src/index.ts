@@ -2,14 +2,14 @@ import { io } from 'socket.io-client';
 // @ts-ignore
 import screenshot from 'screenshot-desktop';
 import si from 'systeminformation';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, exec, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { RTCPeerConnection } from 'werift';
 
 // Config
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5000';
 const CONFIG_FILE = path.join(os.homedir(), '.bradd-rdt-client-id');
 
 console.log(`Client starting... Connecting to ${SERVER_URL}`);
@@ -90,6 +90,27 @@ ensureInputProcess();
 let screenWidth = 1920;
 let screenHeight = 1080;
 
+function setupAutorun() {
+    // Only for Windows and Packaged apps
+    // @ts-ignore
+    if (process.platform === 'win32' && process.pkg) {
+        const exePath = process.execPath;
+        const keyName = 'BraddRDTClient';
+        
+        console.log('Configuring autorun for:', exePath);
+        
+        const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${exePath}" /f`;
+        
+        exec(cmd, (err) => {
+            if (err) {
+                console.error('Failed to setup autorun:', err);
+            } else {
+                console.log('Autorun configured successfully.');
+            }
+        });
+    }
+}
+
 async function main() {
     let hostname = 'Unknown';
     let platform = 'Unknown';
@@ -112,6 +133,8 @@ async function main() {
     
     console.log(`Identifying as ${hostname} (${platform})`);
 
+    setupAutorun();
+
     if (socket.connected) {
         register();
     }
@@ -119,6 +142,10 @@ async function main() {
     socket.on('connect', () => {
         console.log('Connected to server ID:', socket.id);
         register();
+    });
+
+    socket.on('connect_error', (err) => {
+        console.error('Connection error:', err.message);
     });
 
     function register() {
@@ -150,6 +177,14 @@ async function main() {
 
         const dc = newPc.createDataChannel('screen');
         
+        let pendingAck = false;
+        let lastSendTime = 0;
+        
+        dc.onmessage = (event: any) => {
+             const data = event.data || event;
+             if (data.toString() === 'ack') pendingAck = false;
+        };
+        
         // Start sending frames when channel is open
         dc.stateChanged.subscribe((state) => {
              // console.log('DataChannel state:', state);
@@ -159,14 +194,26 @@ async function main() {
                         if (streamInterval) clearInterval(streamInterval);
                         return;
                     }
+
+                    // Flow control: Wait for ACK (max 2s timeout)
+                    const now = Date.now();
+                    if (pendingAck && now - lastSendTime < 2000) return;
+
+                    pendingAck = true;
+                    lastSendTime = now;
+
                     try {
+                        const start = Date.now();
                         const img = await screenshot({ format: 'jpg' });
-                        // console.log('Sending frame:', img.length);
+                        const dur = Date.now() - start;
+                        if (dur > 100) console.log(`Screenshot took ${dur}ms`);
+                        
                         dc.send(img);
                     } catch (err) {
+                        pendingAck = false;
                         console.error('Screenshot error:', err);
                     }
-                }, 200); // 5 FPS
+                }, 100); // 10 FPS
              }
         });
 
@@ -233,13 +280,74 @@ async function main() {
     });
 
     socket.on('input', (data) => {
+        const now = Date.now();
+        console.log(`[${now}] Input received: ${data.type}`);
         handleInput(data);
     });
     
     // Handle remote commands
-    socket.on('command', (data: { command: string, args?: string[], source: string }) => {
+    // Persistent Shell Session
+let shellProcess: ChildProcess | null = null;
+
+socket.on('start-term', async () => {
+    if (shellProcess) return;
+
+    console.log('Starting terminal session...');
+    
+    // Check admin
+    const checkAdmin = () => new Promise<boolean>(resolve => {
+        if (process.platform !== 'win32') return resolve(false); 
+        exec('net session', (err) => {
+            resolve(!err);
+        });
+    });
+
+    const isAdmin = await checkAdmin();
+    const statusMsg = isAdmin 
+        ? '\r\n\x1b[32m[Running as Administrator]\x1b[0m\r\n' 
+        : '\r\n\x1b[33m[Running as User - Restart client as Admin for full privileges]\x1b[0m\r\n';
+    
+    socket.emit('term-data', statusMsg);
+
+    if (process.platform === 'win32') {
+        shellProcess = spawn('powershell.exe', ['-NoLogo'], { shell: false });
+    } else {
+        shellProcess = spawn('bash', ['-i'], { shell: false });
+    }
+
+    shellProcess.stdout?.on('data', (data) => {
+        socket.emit('term-data', data.toString());
+    });
+
+    shellProcess.stderr?.on('data', (data) => {
+        socket.emit('term-data', data.toString());
+    });
+
+    shellProcess.on('exit', () => {
+        shellProcess = null;
+        socket.emit('term-data', '\r\nShell exited.\r\n');
+    });
+});
+
+socket.on('term-input', (data) => {
+    if (shellProcess && shellProcess.stdin) {
+        shellProcess.stdin.write(data);
+    }
+});
+
+socket.on('term-resize', (size: { cols: number, rows: number }) => {
+    // Standard spawn doesn't support resize, ignoring for now.
+    // Ideally use node-pty for resize support.
+});
+
+socket.on('command', (data: { command: string, args?: string[], source: string }) => {
         console.log('Received command:', data.command);
         if (data.command === 'uninstall') {
+            // Remove Autorun
+            if (process.platform === 'win32') {
+                 exec('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "BraddRDTClient" /f', () => {});
+            }
+
             // Uninstall logic: Create a cleanup script and exit
             const scriptPath = path.join(os.tmpdir(), 'cleanup.bat');
             const exePath = process.execPath;

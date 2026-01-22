@@ -5,7 +5,7 @@ module.exports = {
     args   : "start --workspace=packages/server",
     env: {
        NODE_ENV: "production",
-       PORT: 3000
+       PORT: 5174
     }
   }]
 }

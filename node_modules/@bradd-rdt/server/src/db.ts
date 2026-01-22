@@ -4,8 +4,9 @@ import { open, Database } from 'sqlite';
 let db: Database;
 
 export async function initDB() {
+  const dbPath = process.env.DB_PATH || './database.sqlite';
   db = await open({
-    filename: './database.sqlite',
+    filename: dbPath,
     driver: sqlite3.Database
   });
 

@@ -13,7 +13,7 @@ const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const werift_1 = require("werift");
 // Config
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5174';
 const CONFIG_FILE = path_1.default.join(os_1.default.homedir(), '.bradd-rdt-client-id');
 console.log(`Client starting... Connecting to ${SERVER_URL}`);
 // Get or Create Client ID

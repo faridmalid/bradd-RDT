@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
+import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
+import 'xterm/css/xterm.css';
 import { API_URL, SOCKET_URL } from './config';
 
 const socket = io(SOCKET_URL);
+socket.on('connect', () => console.log('Frontend Socket Connected:', socket.id));
+socket.on('connect_error', (err) => console.error('Frontend Socket Connection Error:', err));
 
 // --- Types ---
 interface Client {
@@ -14,6 +19,7 @@ interface Client {
   group_id: number;
   group_name: string;
   last_seen: string;
+  socketId?: string;
 }
 
 interface Group {
@@ -35,16 +41,22 @@ function Login({ onLogin }: { onLogin: () => void }) {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch(`${API_URL}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    if (res.ok) {
-      onLogin();
-      navigate('/');
-    } else {
-      alert('Invalid credentials');
+    try {
+        const res = await fetch(`${API_URL}/api/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        if (res.ok) {
+          localStorage.setItem('bradd_auth', 'true');
+          onLogin();
+          navigate('/');
+        } else {
+          alert('Invalid credentials');
+        }
+    } catch (error) {
+        console.error("Login error:", error);
+        alert('Connection failed. Please check if the server is running.');
     }
   };
 
@@ -70,7 +82,10 @@ function Sidebar() {
                 <Link to="/builder" className="block py-2 px-4 hover:bg-gray-700 rounded mb-1">Client Builder</Link>
             </nav>
             <div className="p-4 border-t border-gray-700">
-                <button onClick={() => window.location.reload()} className="text-sm text-gray-400 hover:text-white">Logout</button>
+                <button onClick={() => {
+                    localStorage.removeItem('bradd_auth');
+                    window.location.reload();
+                }} className="text-sm text-gray-400 hover:text-white">Logout</button>
             </div>
         </div>
     );
@@ -288,10 +303,20 @@ function UserManagement() {
 
 function Builder() {
     const [name, setName] = useState('bradd-client');
-    const [serverUrl, setServerUrl] = useState('http://localhost:3000');
+    const [serverUrl, setServerUrl] = useState('');
     const [building, setBuilding] = useState(false);
     const [downloadUrl, setDownloadUrl] = useState('');
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        const protocol = window.location.protocol;
+        const hostname = window.location.hostname;
+        const isDev = import.meta.env.MODE === 'development';
+        // In dev, server is usually on 5000. In prod, it's same origin/port.
+        const port = isDev ? '5000' : window.location.port;
+        const portSuffix = port ? `:${port}` : '';
+        setServerUrl(`${protocol}//${hostname}${portSuffix}`);
+    }, []);
 
     const handleBuild = async () => {
         setBuilding(true);
@@ -365,18 +390,106 @@ function Builder() {
     );
 }
 
+function TerminalModal({ client, socket, onClose }: { client: Client, socket: any, onClose: () => void }) {
+    const termRef = useRef<HTMLDivElement>(null);
+    const xtermRef = useRef<Terminal | null>(null);
+
+    useEffect(() => {
+        if (!termRef.current) return;
+
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#ffffff'
+            }
+        });
+        const fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+        
+        term.open(termRef.current);
+        fitAddon.fit();
+        xtermRef.current = term;
+
+        // Start shell on client
+        socket.emit('start-term', { target: client.id });
+
+        // Handle input
+        term.onData((data) => {
+            // Send to server, targeting the client
+            // Note: Server expects { target: clientDBId, data: string } for admin->client
+            socket.emit('term-data', { target: client.id, data });
+        });
+
+        // Handle output
+        const handleTermData = (data: { source: string, data: string }) => {
+            // Check if data comes from our target client
+            // The server broadcasts { source: socketId, data: string } for client->admin
+            // We should check if source matches client.socketId
+            if (client.socketId && data.source !== client.socketId) return;
+            
+            term.write(data.data);
+        };
+
+        socket.on('term-data', handleTermData);
+
+        // Resize observer
+        const resizeObserver = new ResizeObserver(() => {
+            try { fitAddon.fit(); } catch(e) {}
+        });
+        resizeObserver.observe(termRef.current);
+
+        return () => {
+            term.dispose();
+            socket.off('term-data', handleTermData);
+            resizeObserver.disconnect();
+        };
+    }, [client.id, client.socketId]);
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-gray-900 rounded-lg shadow-xl w-3/4 h-3/4 flex flex-col overflow-hidden">
+                <div className="flex justify-between items-center p-2 bg-gray-800 border-b border-gray-700">
+                    <h3 className="text-white font-bold px-2">Terminal - {client.hostname}</h3>
+                    <button onClick={onClose} className="text-gray-400 hover:text-white px-2">✕</button>
+                </div>
+                <div className="flex-1 p-2 overflow-hidden bg-black" ref={termRef}></div>
+            </div>
+        </div>
+    );
+}
+
 function ClientView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const imgRef = useRef<HTMLImageElement>(null);
   const [loading, setLoading] = useState(true);
   const [fitToScreen, setFitToScreen] = useState(true);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [clientInfo, setClientInfo] = useState<Client | null>(null);
+
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const candidatesQueue = useRef<RTCIceCandidate[]>([]);
 
+  // Fetch client info for socketId
+  useEffect(() => {
+      fetch(`${API_URL}/api/clients`)
+        .then(res => res.json())
+        .then((data: Client[]) => {
+            const c = data.find(c => c.id === id);
+            if (c) setClientInfo(c);
+        });
+  }, [id]);
+
   useEffect(() => {
     // Request stream
-    socket.emit('start-stream', { target: id });
+    const startStream = () => {
+        console.log('ClientView: Requesting stream');
+        socket.emit('start-stream', { target: id });
+    };
+
+    if (socket.connected) startStream();
+    socket.on('connect', startStream);
 
     const onOffer = async (data: { sdp: any, source: string }) => {
          console.log('Received offer from', data.source);
@@ -403,6 +516,8 @@ function ClientView() {
                      }
                      imgRef.current.src = url;
                      setLoading(false);
+                     // Flow control: Send ACK
+                     if (dc.readyState === 'open') dc.send('ack');
                  }
              };
          };
@@ -445,6 +560,7 @@ function ClientView() {
     socket.on('ice-candidate', onCandidate);
 
     return () => {
+      socket.off('connect', startStream);
       socket.off('offer', onOffer);
       socket.off('ice-candidate', onCandidate);
       socket.emit('stop-stream', { target: id });
@@ -510,51 +626,57 @@ function ClientView() {
 
   return (
     <div className="flex flex-col h-screen bg-black" onKeyDown={handleKeyDown} tabIndex={0}>
-      <div className="p-2 text-white bg-gray-800 flex justify-between items-center">
-          <div className="flex items-center">
-             <button className="mr-4 text-gray-300 hover:text-white" onClick={() => navigate('/')}>&larr; Back</button>
-             <span>Connected to {id}</span>
-             <label className="ml-4 flex items-center cursor-pointer text-sm text-gray-300">
-                <input 
-                    type="checkbox" 
-                    checked={fitToScreen} 
-                    onChange={e => setFitToScreen(e.target.checked)} 
-                    className="mr-2"
-                />
+      <div className="bg-gray-800 p-2 flex justify-between items-center text-white">
+          <div className="flex items-center gap-4">
+            <button className="hover:bg-gray-700 p-2 rounded" onClick={() => navigate('/')}>← Back</button>
+            <span className="font-bold">{clientInfo?.hostname || id}</span>
+          </div>
+          <div className="flex items-center gap-4">
+             <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={fitToScreen} onChange={e => setFitToScreen(e.target.checked)} />
                 Fit to Screen
              </label>
-          </div>
-          <div>
-            <button className="bg-gray-600 px-3 py-1 rounded mr-2" onClick={() => {
-                const cmd = prompt("Enter shell command:");
-                if(cmd) socket.emit('command', { target: id, command: cmd });
-            }}>Shell</button>
-            <button className="bg-red-500 px-3 py-1 rounded" onClick={() => {
-                if(confirm("Uninstall client?")) {
-                    socket.emit('command', { target: id, command: 'uninstall' });
-                    alert('Uninstall command sent');
-                }
-            }}>Uninstall</button>
+             <button 
+                className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded border border-gray-600"
+                onClick={() => setShowTerminal(true)}
+             >
+                &gt;_ Shell
+             </button>
+             <span className={`w-3 h-3 rounded-full ${loading ? 'bg-red-500' : 'bg-green-500'}`} title={loading ? 'Disconnected/Loading' : 'Connected'} />
           </div>
       </div>
-      <div className="flex-1 overflow-auto flex justify-center items-center relative bg-gray-900">
-        {loading && <div className="text-white absolute">Waiting for stream (WebRTC)...</div>}
-        <img 
+      
+      <div className="flex-1 bg-gray-900 relative overflow-hidden flex items-center justify-center">
+         {loading && <div className="text-white">Waiting for stream...</div>}
+         <img 
             ref={imgRef} 
-            className={`cursor-crosshair ${fitToScreen ? 'max-w-full max-h-full object-contain' : 'max-w-none'}`}
+            className="max-w-full max-h-full"
+            style={{ 
+                objectFit: fitToScreen ? 'contain' : 'none',
+                width: fitToScreen ? '100%' : 'auto',
+                height: fitToScreen ? '100%' : 'auto'
+            }}
             onMouseDown={handleMouseDown}
             onContextMenu={handleContextMenu}
             onWheel={handleWheel}
-            alt="Remote Desktop" 
-            style={{ display: loading ? 'none' : 'block' }}
-        />
+         />
       </div>
+
+      {showTerminal && clientInfo && (
+          <TerminalModal 
+            client={clientInfo} 
+            socket={socket} 
+            onClose={() => setShowTerminal(false)} 
+          />
+      )}
     </div>
   );
 }
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+      return localStorage.getItem('bradd_auth') === 'true';
+  });
 
   return (
     <BrowserRouter>
