@@ -113,18 +113,33 @@ let screenHeight = 1080;
 function setupAutorun() {
     // Only for Windows
     if (process.platform === 'win32') {
-        // If packaged, use execPath. If dev, use process.cwd() + InputHelper (not ideal for dev autorun but ok)
-        // We only really care about packaged for autorun usually.
-        
+        const keyName = 'BraddRDTClient';
+        let targetPath = '';
+
         // @ts-ignore
         if (process.pkg) {
-             const exePath = process.execPath;
-             const keyName = 'BraddRDTClient';
-             
-             console.log('Configuring autorun for:', exePath);
+             targetPath = process.execPath;
+        } else {
+            // Dev mode: Create a .bat file to launch the client
+            const batPath = path.join(process.cwd(), 'start_client.bat');
+            const batContent = `@echo off
+cd /d "${process.cwd()}"
+npm start
+`;
+            try {
+                fs.writeFileSync(batPath, batContent);
+                targetPath = batPath;
+            } catch (e) {
+                console.error('Failed to create autorun batch file:', e);
+                return;
+            }
+        }
+
+        if (targetPath) {
+             console.log('Configuring autorun for:', targetPath);
              
              // Use HKCU Run key
-             const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${exePath}" /f`;
+             const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${targetPath}" /f`;
              
              exec(cmd, (err) => {
                  if (err) {
