@@ -573,9 +573,48 @@ function ClientView() {
 
   const handleMouseDown = (e: React.MouseEvent) => {
       if (!imgRef.current) return;
-      const rect = imgRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
+      const img = imgRef.current;
+      const rect = img.getBoundingClientRect();
+      
+      // Calculate actual displayed image dimensions
+      let displayedWidth = rect.width;
+      let displayedHeight = rect.height;
+      let offsetX = 0;
+      let offsetY = 0;
+
+      if (fitToScreen && img.naturalWidth && img.naturalHeight) {
+          const ratio = img.naturalWidth / img.naturalHeight;
+          const containerRatio = rect.width / rect.height;
+
+          if (ratio > containerRatio) {
+              // Limited by width
+              displayedWidth = rect.width;
+              displayedHeight = rect.width / ratio;
+              offsetY = (rect.height - displayedHeight) / 2;
+          } else {
+              // Limited by height
+              displayedHeight = rect.height;
+              displayedWidth = rect.height * ratio;
+              offsetX = (rect.width - displayedWidth) / 2;
+          }
+      }
+
+      // Calculate coordinates relative to the actual image
+      const clientX = e.clientX - rect.left;
+      const clientY = e.clientY - rect.top;
+
+      // Check if click is within the image area
+      if (
+          clientX < offsetX || 
+          clientX > offsetX + displayedWidth || 
+          clientY < offsetY || 
+          clientY > offsetY + displayedHeight
+      ) {
+          return; // Clicked on letterbox/pillarbox
+      }
+
+      const x = (clientX - offsetX) / displayedWidth;
+      const y = (clientY - offsetY) / displayedHeight;
       
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'left';
       
@@ -587,6 +626,11 @@ function ClientView() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
+      // Prevent default scrolling of the page
+      // Note: React's synthetic event might happen after default? 
+      // It's better to prevent default on the container if possible, but let's try here.
+      // e.preventDefault(); // React synthetic events might not support this for passive listeners
+      
       const amount = e.deltaY > 0 ? -120 : 120;
       socket.emit('input', { target: id, type: 'scroll', amount });
   };

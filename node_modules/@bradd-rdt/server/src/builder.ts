@@ -50,7 +50,56 @@ export async function buildClientExe(name: string, serverUrl: string): Promise<s
         
         await runCommand('npx', ['pkg', '.', '--targets', 'node18-win-x64', '--output', `build/${safeName}`], CLIENT_DIR);
 
-        return path.join(CLIENT_DIR, 'build', `${safeName}.exe`);
+        const exePath = path.join(CLIENT_DIR, 'build', `${safeName}.exe`);
+
+        // Patch EXE to be a Windows GUI application (suppress console)
+        try {
+            console.log('Patching EXE to be silent (Windows GUI subsystem)...');
+            const fd = fs.openSync(exePath, 'r+');
+            const buffer = Buffer.alloc(4);
+            
+            // Read PE Header offset at 0x3C
+            fs.readSync(fd, buffer, 0, 4, 0x3C);
+            const peOffset = buffer.readUInt32LE(0);
+            
+            // Read Optional Header Magic Number (at PE + 24)
+            // PE Signature (4) + File Header (20) = 24 bytes offset
+            fs.readSync(fd, buffer, 0, 2, peOffset + 24);
+            const magic = buffer.readUInt16LE(0);
+            
+            let subsystemOffset = -1;
+            
+            if (magic === 0x10b) { // PE32 (32-bit)
+                // Subsystem is at offset 68 (0x44) in Optional Header
+                subsystemOffset = peOffset + 24 + 68;
+            } else if (magic === 0x20b) { // PE32+ (64-bit)
+                // Subsystem is at offset 68 (0x44) in Optional Header
+                subsystemOffset = peOffset + 24 + 68;
+            }
+            
+            if (subsystemOffset !== -1) {
+                // Read current subsystem
+                fs.readSync(fd, buffer, 0, 2, subsystemOffset);
+                const currentSubsystem = buffer.readUInt16LE(0);
+                
+                if (currentSubsystem === 3) { // IMAGE_SUBSYSTEM_WINDOWS_CUI
+                    buffer.writeUInt16LE(2, 0); // IMAGE_SUBSYSTEM_WINDOWS_GUI
+                    fs.writeSync(fd, buffer, 0, 2, subsystemOffset);
+                    console.log('Successfully patched EXE to Windows GUI subsystem.');
+                } else {
+                    console.log(`EXE is already subsystem ${currentSubsystem}, skipping patch.`);
+                }
+            } else {
+                console.warn('Unknown PE format, could not patch subsystem.');
+            }
+            
+            fs.closeSync(fd);
+        } catch (patchErr) {
+            console.error('Failed to patch EXE subsystem:', patchErr);
+            // Don't fail the build, just warn
+        }
+
+        return exePath;
 
     } finally {
         isBuilding = false;
