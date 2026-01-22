@@ -43,6 +43,22 @@ namespace InputHelper {
                     int y = int.Parse(args[2]);
                     SetCursorPos(x, y);
                 }
+                else if (command == "mousedown" && args.Length >= 2) {
+                    string btn = args[1];
+                    if (btn == "left") {
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    } else if (btn == "right") {
+                        mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
+                    }
+                }
+                else if (command == "mouseup" && args.Length >= 2) {
+                    string btn = args[1];
+                    if (btn == "left") {
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    } else if (btn == "right") {
+                        mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+                    }
+                }
                 else if (command == "click" && args.Length >= 2) {
                     string btn = args[1];
                     if (btn == "left") {
@@ -70,13 +86,15 @@ namespace InputHelper {
                 }
                 else if (command == "type" && args.Length >= 2) {
                     // Reconstruct text if it was split by spaces (simple approach)
-                    // But our protocol sends single tokens mostly or we should join
                     string text = args[1]; 
                     if (args.Length > 2) {
-                         // If there were spaces, join them back
                          for (int i = 2; i < args.Length; i++) text += " " + args[i];
                     }
-                    SendKeys.SendWait(text);
+                    // Use Send instead of SendWait to prevent blocking if target app is busy
+                    SendKeys.Send(text);
+                }
+                else if (command == "ping") {
+                    Console.WriteLine("pong");
                 }
             } catch (Exception e) {
                 Console.WriteLine("Error: " + e.Message);

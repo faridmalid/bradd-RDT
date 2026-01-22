@@ -573,6 +573,10 @@ function ClientView() {
 
   const handleMouseDown = (e: React.MouseEvent) => {
       if (!imgRef.current) return;
+      
+      // We want to track mouse moves as drags now
+      // Calculate coordinates and send mousedown
+      
       const img = imgRef.current;
       const rect = img.getBoundingClientRect();
       
@@ -618,7 +622,14 @@ function ClientView() {
       
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'left';
       
-      socket.emit('input', { target: id, type: 'click', button, x, y });
+      // Send move first to ensure we are at correct start position
+      socket.emit('input', { target: id, type: 'move', x, y });
+      socket.emit('input', { target: id, type: 'mousedown', button });
+  };
+  
+  const handleMouseUp = (e: React.MouseEvent) => {
+      const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'left';
+      socket.emit('input', { target: id, type: 'mouseup', button });
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -701,6 +712,7 @@ function ClientView() {
                 height: fitToScreen ? '100%' : 'auto'
             }}
             onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
             onContextMenu={handleContextMenu}
             onWheel={handleWheel}
          />

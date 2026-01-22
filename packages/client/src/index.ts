@@ -77,6 +77,12 @@ function ensureInputProcess() {
                 console.error('InputHelper process error:', err);
                 inputProcess = null;
             });
+
+            inputProcess.stdin?.on('error', (err) => {
+                console.error('InputHelper stdin error:', err);
+                if (inputProcess) inputProcess.kill();
+                inputProcess = null;
+            });
             
             // Consume streams to prevent buffering/hanging
             inputProcess.stdout?.on('data', (data) => {
@@ -103,23 +109,29 @@ let screenWidth = 1920;
 let screenHeight = 1080;
 
 function setupAutorun() {
-    // Only for Windows and Packaged apps
-    // @ts-ignore
-    if (process.platform === 'win32' && process.pkg) {
-        const exePath = process.execPath;
-        const keyName = 'BraddRDTClient';
+    // Only for Windows
+    if (process.platform === 'win32') {
+        // If packaged, use execPath. If dev, use process.cwd() + InputHelper (not ideal for dev autorun but ok)
+        // We only really care about packaged for autorun usually.
         
-        console.log('Configuring autorun for:', exePath);
-        
-        const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${exePath}" /f`;
-        
-        exec(cmd, (err) => {
-            if (err) {
-                console.error('Failed to setup autorun:', err);
-            } else {
-                console.log('Autorun configured successfully.');
-            }
-        });
+        // @ts-ignore
+        if (process.pkg) {
+             const exePath = process.execPath;
+             const keyName = 'BraddRDTClient';
+             
+             console.log('Configuring autorun for:', exePath);
+             
+             // Use HKCU Run key
+             const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${exePath}" /f`;
+             
+             exec(cmd, (err) => {
+                 if (err) {
+                     console.error('Failed to setup autorun:', err);
+                 } else {
+                     console.log('Autorun configured successfully.');
+                 }
+             });
+        }
     }
 }
 
@@ -436,6 +448,19 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Keep process alive
 setInterval(() => {}, 60000);
+
+// Keep InputHelper alive and check health
+setInterval(() => {
+    if (inputProcess && inputProcess.stdin) {
+        try {
+            inputProcess.stdin.write('ping\n');
+        } catch (e) {
+            console.error('InputHelper ping failed:', e);
+            if (inputProcess) inputProcess.kill();
+            inputProcess = null;
+        }
+    }
+}, 30000);
 }
 
 function handleInput(data: any) {
@@ -459,6 +484,10 @@ function handleInput(data: any) {
         }
 
         args = ['move', x.toString(), y.toString()];
+    } else if (data.type === 'mousedown') {
+        args = ['mousedown', data.button || 'left'];
+    } else if (data.type === 'mouseup') {
+        args = ['mouseup', data.button || 'left'];
     } else if (data.type === 'click') {
         if (data.x !== undefined && data.y !== undefined) {
              let x = data.x;
