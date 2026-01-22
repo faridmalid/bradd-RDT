@@ -1,0 +1,12 @@
+node_modules
+packages/*/node_modules
+dist
+packages/*/dist
+build
+packages/*/build
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+*.log
+packages/server/database.sqlite
