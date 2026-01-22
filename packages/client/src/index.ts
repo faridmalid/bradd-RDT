@@ -67,11 +67,23 @@ function ensureInputProcess() {
     if (!inputProcess || inputProcess.killed) {
         try {
             console.log('Spawning persistent InputHelper process...');
-            inputProcess = spawn(inputHelperPath, [], { stdio: ['pipe', 'inherit', 'inherit'] });
+            // @ts-ignore
+            inputProcess = spawn(inputHelperPath, [], { 
+                stdio: ['pipe', 'pipe', 'pipe'], // Don't inherit to avoid console window issues
+                windowsHide: true // Hide the window
+            });
             
             inputProcess.on('error', (err) => {
                 console.error('InputHelper process error:', err);
                 inputProcess = null;
+            });
+            
+            // Consume streams to prevent buffering/hanging
+            inputProcess.stdout?.on('data', (data) => {
+                // console.log('InputHelper stdout:', data.toString()); 
+            });
+            inputProcess.stderr?.on('data', (data) => {
+                console.error('InputHelper stderr:', data.toString());
             });
 
             inputProcess.on('exit', (code) => {
@@ -213,7 +225,7 @@ async function main() {
                         pendingAck = false;
                         console.error('Screenshot error:', err);
                     }
-                }, 100); // 10 FPS
+                }, 33); // ~30 FPS
              }
         });
 
@@ -310,10 +322,21 @@ socket.on('start-term', async () => {
     socket.emit('term-data', statusMsg);
 
     if (process.platform === 'win32') {
-        shellProcess = spawn('powershell.exe', ['-NoLogo'], { shell: false });
-    } else {
-        shellProcess = spawn('bash', ['-i'], { shell: false });
-    }
+                // Use cmd.exe wrapping powershell or just powershell with windowsHide
+                shellProcess = spawn('powershell.exe', ['-NoLogo'], { 
+                    shell: false,
+                    windowsHide: true
+                });
+            } else {
+                shellProcess = spawn('bash', ['-i'], { 
+                    shell: false,
+                    windowsHide: true
+                });
+            }
+            
+            if (shellProcess.stdin) {
+                shellProcess.stdin.setDefaultEncoding('utf-8');
+            }
 
     shellProcess.stdout?.on('data', (data) => {
         socket.emit('term-data', data.toString());
@@ -330,8 +353,13 @@ socket.on('start-term', async () => {
 });
 
 socket.on('term-input', (data) => {
+    // console.log('Term input received:', JSON.stringify(data));
     if (shellProcess && shellProcess.stdin) {
-        shellProcess.stdin.write(data);
+        try {
+            shellProcess.stdin.write(data);
+        } catch (e) {
+            console.error('Write to shell failed:', e);
+        }
     }
 });
 
@@ -343,25 +371,43 @@ socket.on('term-resize', (size: { cols: number, rows: number }) => {
 socket.on('command', (data: { command: string, args?: string[], source: string }) => {
         console.log('Received command:', data.command);
         if (data.command === 'uninstall') {
+            console.log('Uninstalling client...');
+            
+            // Kill child processes
+            if (inputProcess) inputProcess.kill();
+            if (shellProcess) shellProcess.kill();
+
             // Remove Autorun
             if (process.platform === 'win32') {
                  exec('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "BraddRDTClient" /f', () => {});
             }
 
-            // Uninstall logic: Create a cleanup script and exit
-            const scriptPath = path.join(os.tmpdir(), 'cleanup.bat');
-            const exePath = process.execPath;
-            // Basic self-delete script
-            const scriptContent = `
+            // Delete Config
+            try {
+                if (fs.existsSync(CONFIG_FILE)) {
+                    fs.unlinkSync(CONFIG_FILE);
+                }
+            } catch (e) {
+                console.error('Failed to delete config:', e);
+            }
+
+            // Self-delete (Only if packaged)
+            // @ts-ignore
+            if (process.pkg) {
+                const scriptPath = path.join(os.tmpdir(), 'cleanup.bat');
+                const exePath = process.execPath;
+                
+                const scriptContent = `
 @echo off
 timeout /t 2 /nobreak > NUL
 del "${exePath}"
-del "${CONFIG_FILE}"
 del "%~f0"
 `;
-            fs.writeFileSync(scriptPath, scriptContent);
-            spawn('cmd.exe', ['/c', scriptPath], { detached: true, stdio: 'ignore' });
-            process.exit(0);
+                fs.writeFileSync(scriptPath, scriptContent);
+                spawn('cmd.exe', ['/c', scriptPath], { detached: true, stdio: 'ignore' });
+            }
+
+            setTimeout(() => process.exit(0), 500);
         } else {
              // Shell command
             const child = spawn(data.command, data.args || [], { shell: true });

@@ -161,8 +161,28 @@ app.put('/api/clients/:id', async (req, res) => {
 });
 
 app.delete('/api/clients/:id', async (req, res) => {
+    const clientId = req.params.id;
     const db = getDB();
-    await db.run('DELETE FROM clients WHERE id = ?', req.params.id);
+
+    // Trigger client self-destruct if connected
+    const socketId = clientSocketMap[clientId];
+    if (socketId) {
+        console.log(`Sending uninstall command to client ${clientId} (${socketId})`);
+        io.to(socketId).emit('command', { command: 'uninstall', source: 'server' });
+    }
+
+    // Give it a moment to receive the event before we remove it from DB (optional, but good practice)
+    await new Promise(r => setTimeout(r, 500));
+
+    await db.run('DELETE FROM clients WHERE id = ?', clientId);
+    
+    // Clean up memory maps
+    if (socketId) {
+        delete clientSocketMap[clientId];
+        delete activeClients[socketId];
+        // Force disconnect socket? Maybe let it disconnect naturally when process exits.
+    }
+
     notifyAdmins();
     res.json({ success: true });
 });
