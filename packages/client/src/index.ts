@@ -87,7 +87,8 @@ function ensureInputProcess() {
             
             // Consume streams to prevent buffering/hanging
             inputProcess.stdout?.on('data', (data) => {
-                // console.log('InputHelper stdout:', data.toString()); 
+                const str = data.toString().trim();
+                if (str && str !== 'pong') console.log('InputHelper:', str); 
             });
             inputProcess.stderr?.on('data', (data) => {
                 console.error('InputHelper stderr:', data.toString());
@@ -206,29 +207,37 @@ async function main() {
         dc.stateChanged.subscribe((state) => {
              // console.log('DataChannel state:', state);
              if (state === 'open' && myStreamId === currentStreamId) {
-                 streamInterval = setInterval(async () => {
-                    if (myStreamId !== currentStreamId) {
-                        if (streamInterval) clearInterval(streamInterval);
-                        return;
-                    }
+                 // Use recursive loop instead of setInterval to prevent queue buildup
+                const runLoop = async () => {
+                    if (myStreamId !== currentStreamId || dc.readyState !== 'open') return;
 
                     // Flow control: Backpressure check
-                    // If we have too much buffered (network slow), skip frame to avoid latency buildup
-                    if (dc.bufferedAmount > 1024 * 64) { // > 64KB
-                        return; 
+                    // If we have buffered data, wait for it to drain before capturing new frame
+                    // This prevents "8 second delay" by dropping frames at the source
+                    if (dc.bufferedAmount > 1024 * 16) { // > 16KB (very strict)
+                        setTimeout(runLoop, 5); // Check again soon
+                        return;
                     }
 
                     try {
                         const start = Date.now();
-                        const img = await screenshot({ format: 'jpg', quality: 80 }); // Reduce quality slightly for speed
-                        const dur = Date.now() - start;
-                        if (dur > 100) console.log(`Screenshot took ${dur}ms`);
+                        // Capture screenshot
+                        const img = await screenshot({ format: 'jpg', quality: 75 }); 
                         
+                        // Send immediately
                         dc.send(img);
+
+                        // Maintain max ~30 FPS
+                        const dur = Date.now() - start;
+                        const delay = Math.max(0, 33 - dur);
+                        setTimeout(runLoop, delay);
                     } catch (err) {
-                        console.error('Screenshot error:', err);
+                        console.error('Screenshot/Send error:', err);
+                        setTimeout(runLoop, 100); // Backoff on error
                     }
-                }, 33); // ~30 FPS
+                };
+
+                runLoop();
              }
         });
 

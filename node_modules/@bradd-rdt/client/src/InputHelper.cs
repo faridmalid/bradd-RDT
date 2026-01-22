@@ -42,6 +42,7 @@ namespace InputHelper {
                     int x = int.Parse(args[1]);
                     int y = int.Parse(args[2]);
                     SetCursorPos(x, y);
+                    // Console.WriteLine($"Moved to {x},{y}");
                 }
                 else if (command == "mousedown" && args.Length >= 2) {
                     string btn = args[1];
@@ -50,6 +51,7 @@ namespace InputHelper {
                     } else if (btn == "right") {
                         mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
                     }
+                    Console.WriteLine("MouseDown " + btn);
                 }
                 else if (command == "mouseup" && args.Length >= 2) {
                     string btn = args[1];
@@ -58,6 +60,7 @@ namespace InputHelper {
                     } else if (btn == "right") {
                         mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
                     }
+                    Console.WriteLine("MouseUp " + btn);
                 }
                 else if (command == "click" && args.Length >= 2) {
                     string btn = args[1];
