@@ -240,8 +240,10 @@ io.on('connection', (socket) => {
     try {
         const existing = await db.get('SELECT * FROM clients WHERE id = ?', clientId);
         if (existing) {
-            await db.run('UPDATE clients SET hostname = ?, platform = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', 
-                data.hostname, data.platform, clientId);
+            // Only update platform and last_seen. Keep the hostname (which might have been edited by admin).
+            // We do NOT update hostname here to preserve custom names set in Dashboard.
+            await db.run('UPDATE clients SET platform = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', 
+                data.platform, clientId);
         } else {
             // Assign to default group
             const defaultGroup = await db.get('SELECT id FROM groups WHERE name = ?', 'Default');

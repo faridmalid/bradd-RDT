@@ -241,7 +241,7 @@ async function main() {
              }
              
              if (peers.size > 0) {
-                setTimeout(loop, 33); // ~30 FPS
+                setTimeout(loop, 20); // ~50 FPS target
              } else {
                  isCapturing = false;
              }
