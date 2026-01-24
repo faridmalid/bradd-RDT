@@ -138,16 +138,22 @@ npm start
         if (targetPath) {
              console.log('Configuring autorun for:', targetPath);
              
-             // Use HKCU Run key
-             const cmd = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${keyName}" /t REG_SZ /d "${targetPath}" /f`;
-             
-             exec(cmd, (err) => {
-                 if (err) {
-                     console.error('Failed to setup autorun:', err);
-                 } else {
-                     console.log('Autorun configured successfully.');
-                 }
-             });
+             // Use Startup Folder instead of Registry for better reliability
+             const startupFolder = path.join(os.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+             const shortcutPath = path.join(startupFolder, 'BraddRDTClient.bat'); // Use .bat for simplicity, or just copy the bat there
+
+             try {
+                // For dev mode, we can just write the bat content directly to startup folder
+                // For prod mode (exe), we should create a shortcut, but writing a bat that launches exe is easier
+                
+                const launchScript = `@echo off
+start "" "${targetPath}"
+`;
+                fs.writeFileSync(shortcutPath, launchScript);
+                console.log('Autorun configured in Startup folder:', shortcutPath);
+             } catch (e) {
+                 console.error('Failed to setup autorun in Startup folder:', e);
+             }
         }
     }
 }
@@ -197,124 +203,142 @@ async function main() {
         });
     }
 
-    let pc: RTCPeerConnection | null = null;
-    let streamInterval: NodeJS.Timeout | null = null;
-    let currentStreamId = 0;
+    const peers = new Map<string, RTCPeerConnection>();
+    const dcs = new Map<string, any>(); // DataChannels
+    let isCapturing = false;
+
+    // Shared Capture Loop
+    const startCaptureLoop = () => {
+        if (isCapturing) return;
+        isCapturing = true;
+        
+        const loop = async () => {
+             if (peers.size === 0) {
+                 isCapturing = false;
+                 return; 
+             }
+             
+             try {
+                 // Only capture if at least one DC needs data
+                 let needsFrame = false;
+                 for (const [id, dc] of dcs) {
+                     if (dc.readyState === 'open' && dc.bufferedAmount < 1024 * 64) {
+                         needsFrame = true;
+                         break;
+                     }
+                 }
+
+                 if (needsFrame) {
+                    const img = await screenshot({ format: 'jpg', quality: 75 });
+                    for (const [id, dc] of dcs) {
+                        if (dc.readyState === 'open' && dc.bufferedAmount < 1024 * 64) {
+                            try { dc.send(img); } catch(e) {}
+                        }
+                    }
+                 }
+             } catch(e) {
+                 console.error('Capture error:', e);
+             }
+             
+             if (peers.size > 0) {
+                setTimeout(loop, 33); // ~30 FPS
+             } else {
+                 isCapturing = false;
+             }
+        };
+        
+        loop();
+    };
 
     socket.on('start-stream', async (data) => {
         const { requester } = data; 
         console.log('Starting WebRTC stream for', requester);
-        const myStreamId = ++currentStreamId;
         
-        if (pc) {
-            try { pc.close(); } catch(e) {}
+        if (peers.has(requester)) {
+            try { peers.get(requester)?.close(); } catch(e) {}
+            peers.delete(requester);
+            dcs.delete(requester);
         }
-        if (streamInterval) clearInterval(streamInterval);
 
-        const newPc = new RTCPeerConnection({
+        const pc = new RTCPeerConnection({
             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         });
-        pc = newPc;
+        peers.set(requester, pc);
 
-        const dc = newPc.createDataChannel('screen');
-        
-        // Start sending frames when channel is open
+        const dc = pc.createDataChannel('screen');
+        // werift DataChannel doesn't have standard onopen property sometimes? 
+        // using stateChanged as in previous code
         dc.stateChanged.subscribe((state) => {
-             // console.log('DataChannel state:', state);
-             if (state === 'open' && myStreamId === currentStreamId) {
-                 // Use recursive loop instead of setInterval to prevent queue buildup
-                const runLoop = async () => {
-                    if (myStreamId !== currentStreamId || dc.readyState !== 'open') return;
-
-                    // Flow control: Backpressure check
-                    // If we have buffered data, wait for it to drain before capturing new frame
-                    // This prevents "8 second delay" by dropping frames at the source
-                    if (dc.bufferedAmount > 1024 * 16) { // > 16KB (very strict)
-                        setTimeout(runLoop, 5); // Check again soon
-                        return;
-                    }
-
-                    try {
-                        const start = Date.now();
-                        // Capture screenshot
-                        const img = await screenshot({ format: 'jpg', quality: 75 }); 
-                        
-                        // Send immediately
-                        dc.send(img);
-
-                        // Maintain max ~30 FPS
-                        const dur = Date.now() - start;
-                        const delay = Math.max(0, 33 - dur);
-                        setTimeout(runLoop, delay);
-                    } catch (err) {
-                        console.error('Screenshot/Send error:', err);
-                        setTimeout(runLoop, 100); // Backoff on error
-                    }
-                };
-
-                runLoop();
+             if (state === 'open') {
+                 dcs.set(requester, dc);
+                 startCaptureLoop();
+             } else if (state === 'closed') {
+                 dcs.delete(requester);
              }
         });
 
-        newPc.iceConnectionStateChange.subscribe((state) => {
-             console.log('ICE State:', state);
+        pc.iceConnectionStateChange.subscribe((state) => {
+             console.log(`ICE State (${requester}):`, state);
              if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                 if (streamInterval && myStreamId === currentStreamId) clearInterval(streamInterval);
+                 peers.get(requester)?.close();
+                 peers.delete(requester);
+                 dcs.delete(requester);
              }
         });
 
-        newPc.onIceCandidate.subscribe((candidate) => {
-             if (candidate && myStreamId === currentStreamId) {
+        pc.onIceCandidate.subscribe((candidate) => {
+             if (candidate) {
                 socket.emit('ice-candidate', { target: requester, candidate });
              }
         });
 
         // Create Offer
         try {
-            const offer = await newPc.createOffer();
-            if (myStreamId !== currentStreamId) return; // Abort if cancelled
-            
-            await newPc.setLocalDescription(offer);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
             socket.emit('offer', { target: requester, sdp: offer });
         } catch (e) {
             console.error('Error creating offer:', e);
-            return;
+            peers.delete(requester);
         }
-
-        // Handle signaling
-        const onAnswer = async (ansData: any) => {
-            if (ansData.source === requester && myStreamId === currentStreamId) {
-                try {
-                    await newPc.setRemoteDescription(ansData.sdp);
-                } catch (e) {
-                    console.error('Error setting remote description:', e);
-                }
-            }
-        };
-        
-        const onCandidate = async (candData: any) => {
-             if (candData.source === requester && myStreamId === currentStreamId) {
-                 try {
-                     await newPc.addIceCandidate(candData.candidate);
-                 } catch (e) {
-                     console.error('Error adding candidate:', e);
-                 }
-             }
-        };
-
-        socket.off('answer');
-        socket.off('ice-candidate');
-        socket.on('answer', onAnswer);
-        socket.on('ice-candidate', onCandidate);
     });
 
-    socket.on('stop-stream', () => {
-        console.log('Stopping stream');
-        currentStreamId++; // Invalidate pending
-        if (streamInterval) clearInterval(streamInterval);
+    socket.on('answer', async (data) => {
+        const pc = peers.get(data.source);
         if (pc) {
-            try { pc.close(); } catch(e) {}
-            pc = null;
+            try {
+                await pc.setRemoteDescription(data.sdp);
+            } catch (e) {
+                console.error('Error setting remote description:', e);
+            }
+        }
+    });
+
+    socket.on('ice-candidate', async (data) => {
+        const pc = peers.get(data.source);
+        if (pc) {
+             try {
+                 await pc.addIceCandidate(data.candidate);
+             } catch (e) {
+                 console.error('Error adding candidate:', e);
+             }
+        }
+    });
+
+    socket.on('stop-stream', (data: { requester?: string }) => {
+        // If specific requester sent stop
+        if (data && data.requester) {
+            const pc = peers.get(data.requester);
+            if (pc) {
+                pc.close();
+                peers.delete(data.requester);
+                dcs.delete(data.requester);
+            }
+        } else {
+            // Stop all? Or just ignore? 
+            // Previous behavior stopped all. Let's keep it safe.
+            // But if one admin leaves, we don't want to stop others.
+            // The server usually doesn't emit stop-stream broadcast.
         }
     });
 
@@ -522,6 +546,10 @@ function handleInput(data: any) {
         args = ['scroll', (data.amount || 0).toString()];
     } else if (data.type === 'type') {
         args = ['type', data.text];
+    } else if (data.type === 'keydown') {
+        args = ['keydown', data.keyCode.toString()];
+    } else if (data.type === 'keyup') {
+        args = ['keyup', data.keyCode.toString()];
     }
 
     if (args.length > 0) {

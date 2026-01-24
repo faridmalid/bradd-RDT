@@ -11,11 +11,15 @@ namespace InputHelper {
         [DllImport("user32.dll")]
         public static extern void mouse_event(int dwFlags, int dx, int dy, int cButtons, int dwExtraInfo);
 
+        [DllImport("user32.dll")]
+        static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
+
         private const int MOUSEEVENTF_LEFTDOWN = 0x02;
         private const int MOUSEEVENTF_LEFTUP = 0x04;
         private const int MOUSEEVENTF_RIGHTDOWN = 0x08;
         private const int MOUSEEVENTF_RIGHTUP = 0x10;
         private const int MOUSEEVENTF_WHEEL = 0x0800;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
 
         static void Main(string[] args) {
             // Check if arguments are passed directly (legacy/one-off mode)
@@ -91,16 +95,32 @@ namespace InputHelper {
                     // Reconstruct text if it was split by spaces (simple approach)
                     string text = args[1]; 
                     if (args.Length > 2) {
-                         for (int i = 2; i < args.Length; i++) text += " " + args[i];
+                        for (int i = 2; i < args.Length; i++) text += " " + args[i];
                     }
                     // Use Send instead of SendWait to prevent blocking if target app is busy
                     SendKeys.Send(text);
+                }
+                else if (command == "keydown" && args.Length >= 2) {
+                    try {
+                        byte vk = byte.Parse(args[1]);
+                        keybd_event(vk, 0, 0, 0);
+                    } catch (Exception e) {
+                        Console.WriteLine("Error keydown: " + e.Message);
+                    }
+                }
+                else if (command == "keyup" && args.Length >= 2) {
+                    try {
+                        byte vk = byte.Parse(args[1]);
+                        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+                    } catch (Exception e) {
+                        Console.WriteLine("Error keyup: " + e.Message);
+                    }
                 }
                 else if (command == "ping") {
                     Console.WriteLine("pong");
                 }
             } catch (Exception e) {
-                Console.WriteLine("Error: " + e.Message);
+                Console.WriteLine("Error processing command: " + e.Message);
             }
         }
     }

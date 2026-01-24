@@ -482,7 +482,27 @@ function ClientView() {
   }, [id]);
 
   useEffect(() => {
-    // Request stream
+        const onKeyDown = (e: KeyboardEvent) => {
+             if (!id) return;
+             e.preventDefault();
+             socket.emit('input', { target: id, type: 'keydown', keyCode: e.keyCode });
+        };
+
+        const onKeyUp = (e: KeyboardEvent) => {
+             if (!id) return;
+             e.preventDefault();
+             socket.emit('input', { target: id, type: 'keyup', keyCode: e.keyCode });
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    }, [id]);
+
+    useEffect(() => {
     const startStream = () => {
         console.log('ClientView: Requesting stream');
         socket.emit('start-stream', { target: id });
