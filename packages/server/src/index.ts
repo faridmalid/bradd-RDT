@@ -30,14 +30,14 @@ initDB().then(() => console.log('Database initialized'));
 
 // Build API
 app.post('/api/build', async (req, res) => {
-    const { name, serverUrl } = req.body;
+    const { name, serverUrl, installFolder, exeName } = req.body;
     if (!name || !serverUrl) {
          res.status(400).json({ error: 'Missing name or serverUrl' });
          return;
     }
     
     try {
-        const exePath = await buildClientExe(name, serverUrl);
+        const exePath = await buildClientExe(name, serverUrl, installFolder, exeName);
         const fileName = path.basename(exePath);
         res.json({ downloadUrl: `/downloads/${fileName}` });
     } catch (e: any) {

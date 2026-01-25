@@ -310,6 +310,8 @@ function UserManagement() {
 function Builder() {
     const [name, setName] = useState('bradd-client');
     const [serverUrl, setServerUrl] = useState('');
+    const [installFolder, setInstallFolder] = useState('BraddRDT');
+    const [exeName, setExeName] = useState('BraddRDT.exe');
     const [building, setBuilding] = useState(false);
     const [downloadUrl, setDownloadUrl] = useState('');
     const [error, setError] = useState('');
@@ -333,7 +335,7 @@ function Builder() {
             const res = await fetch(`${API_URL}/api/build`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, serverUrl })
+                body: JSON.stringify({ name, serverUrl, installFolder, exeName })
             });
             const data = await res.json();
             if (res.ok) {
@@ -355,12 +357,27 @@ function Builder() {
                 <h1 className="text-3xl font-bold mb-6">Client Builder</h1>
                 <div className="bg-white p-6 rounded shadow max-w-2xl">
                     <div className="mb-4">
-                        <label className="block mb-2 font-bold">Client Name (Executable Name)</label>
-                        <input className="w-full border p-2 rounded" value={name} onChange={e => setName(e.target.value)} />
+                        <label className="block mb-2 font-bold">Client Hostname (Identifier)</label>
+                        <input className="w-full border p-2 rounded" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. reception-pc" />
+                        <p className="text-sm text-gray-500 mt-1">This name will appear in the dashboard.</p>
                     </div>
-                    <div className="mb-6">
+                    <div className="mb-4">
                         <label className="block mb-2 font-bold">Server URL</label>
                         <input className="w-full border p-2 rounded" value={serverUrl} onChange={e => setServerUrl(e.target.value)} />
+                    </div>
+
+                    <div className="border-t border-gray-200 my-4 pt-4">
+                        <h3 className="font-bold text-lg mb-3">Installation Settings</h3>
+                        <div className="mb-4">
+                            <label className="block mb-2 font-bold">Installation Folder Name</label>
+                            <input className="w-full border p-2 rounded" value={installFolder} onChange={e => setInstallFolder(e.target.value)} placeholder="e.g. MyRemoteSupport" />
+                            <p className="text-sm text-gray-500 mt-1">Folder in %APPDATA% where client will be installed.</p>
+                        </div>
+                        <div className="mb-6">
+                            <label className="block mb-2 font-bold">Installed Executable Name</label>
+                            <input className="w-full border p-2 rounded" value={exeName} onChange={e => setExeName(e.target.value)} placeholder="e.g. support-client.exe" />
+                            <p className="text-sm text-gray-500 mt-1">Name of the .exe file after installation.</p>
+                        </div>
                     </div>
                     
                     <button 
@@ -374,22 +391,17 @@ function Builder() {
                     {error && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">{error}</div>}
                     
                     {downloadUrl && (
-                        <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded text-center">
-                            <p className="mb-2 text-green-800 font-bold">Build Successful!</p>
-                            <a href={`${API_URL}${downloadUrl}`} className="inline-block bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 font-bold" target="_blank" rel="noreferrer">
-                                Download {name}.exe
+                        <div className="mt-6 p-4 bg-green-100 border border-green-300 rounded text-center">
+                            <p className="font-bold text-green-800 mb-2">Build Successful!</p>
+                            <a 
+                                href={`${API_URL}${downloadUrl}`} 
+                                className="inline-block bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 font-bold"
+                                download
+                            >
+                                Download Installer
                             </a>
                         </div>
                     )}
-
-                    <div className="mt-8 border-t pt-4">
-                         <h3 className="font-bold mb-2">Installation</h3>
-                         <p className="mb-2 text-sm text-gray-600">
-                            1. Download the executable.<br/>
-                            2. Run it on the target machine.<br/>
-                            3. Ideally place it in <code>%APPDATA%</code> or a permanent location.
-                         </p>
-                    </div>
                 </div>
             </div>
         </div>

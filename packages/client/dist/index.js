@@ -618,20 +618,10 @@ del "%~f0"
     });
     // Keep process alive
     setInterval(() => { }, 60000);
-    // Keep InputHelper alive and check health
-    setInterval(() => {
-        if (inputProcess && inputProcess.stdin) {
-            try {
-                inputProcess.stdin.write('ping\n');
-            }
-            catch (e) {
-                console.error('InputHelper ping failed:', e);
-                if (inputProcess)
-                    inputProcess.kill();
-                inputProcess = null;
-            }
-        }
-    }, 30000);
+    /*
+       Removed proactive ping check to avoid potential pipe issues or race conditions during idle.
+       We already handle write errors in handleInput() by respawning the process.
+    */
 }
 function handleInput(data) {
     // data: { type: 'move'|'click'|'type'|'scroll', x, y, button, text, amount }

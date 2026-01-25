@@ -119,8 +119,12 @@ namespace InputHelper {
                 else if (command == "ping") {
                     Console.WriteLine("pong");
                 }
+                
+                // Ensure output is flushed immediately
+                Console.Out.Flush();
             } catch (Exception e) {
                 Console.WriteLine("Error processing command: " + e.Message);
+                Console.Out.Flush();
             }
         }
     }

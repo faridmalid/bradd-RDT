@@ -7,12 +7,18 @@ const DIST_INDEX = path.join(CLIENT_DIR, 'dist/index.js');
 
 let isBuilding = false;
 
-export async function buildClientExe(name: string, serverUrl: string): Promise<string> {
+export async function buildClientExe(name: string, serverUrl: string, installFolder?: string, exeName?: string): Promise<string> {
     if (isBuilding) throw new Error('Build in progress');
     isBuilding = true;
 
     try {
         console.log(`Starting build for ${name} with URL ${serverUrl}`);
+
+        // Defaults
+        const folderName = installFolder || 'BraddRDT';
+        // Ensure exeName ends with .exe if provided, or default to name.exe
+        let finalExeName = exeName || `${name}.exe`;
+        if (!finalExeName.endsWith('.exe')) finalExeName += '.exe';
 
         // 1. Run TSC to ensure clean dist
         await runCommand('npx', ['tsc'], CLIENT_DIR);
@@ -20,12 +26,7 @@ export async function buildClientExe(name: string, serverUrl: string): Promise<s
         // 2. Read dist/index.js
         let content = fs.readFileSync(DIST_INDEX, 'utf-8');
         
-        // 3. Replace URL
-        // We look for the line: const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
-        // Note: The quotes might vary or whitespace.
-        // In the read file it was: const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
-        
-        // We will use a regex that matches the variable assignment
+        // 3. Replace Variables
         const regex = /const SERVER_URL = process\.env\.SERVER_URL \|\| ['"`].*['"`];/;
         if (!regex.test(content)) {
             throw new Error('Could not find SERVER_URL definition in dist/index.js');
@@ -36,20 +37,27 @@ export async function buildClientExe(name: string, serverUrl: string): Promise<s
             .replace(
                 /const CUSTOM_NAME = '';/, 
                 `const CUSTOM_NAME = '${name}';`
+            )
+            .replace(
+                /const INSTALL_FOLDER_NAME = 'BraddRDT';/,
+                `const INSTALL_FOLDER_NAME = '${folderName}';`
+            )
+            .replace(
+                /const INSTALL_EXE_NAME = 'BraddRDT.exe';/,
+                `const INSTALL_EXE_NAME = '${finalExeName}';`
             );
             
         fs.writeFileSync(DIST_INDEX, newContent);
 
-        // 4. Copy InputHelper (if not already done by tsc or if we need to ensure it)
-        // package.json build script does: copy src\InputHelper.exe dist\InputHelper.exe
-        // We should do it here manually to be safe
+        // 4. Copy InputHelper
         const srcHelper = path.join(CLIENT_DIR, 'src/InputHelper.exe');
         const distHelper = path.join(CLIENT_DIR, 'dist/InputHelper.exe');
         fs.copyFileSync(srcHelper, distHelper);
 
         // 5. Run pkg
+        // Output file name for the installer (can be anything, usually just name.exe)
+        // But the internal logic will now use INSTALL_EXE_NAME for the final installed file.
         const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '');
-        // pkg automatically adds .exe for windows targets
         
         await runCommand('npx', ['pkg', '.', '--targets', 'node18-win-x64', '--output', `build/${safeName}`], CLIENT_DIR);
 

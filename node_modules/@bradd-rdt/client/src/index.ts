@@ -11,6 +11,9 @@ import { RTCPeerConnection } from 'werift';
 // Config
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5000';
 const CUSTOM_NAME = ''; // Will be replaced by builder
+const INSTALL_FOLDER_NAME = 'BraddRDT'; // Default folder name, replaced by builder
+const INSTALL_EXE_NAME = 'BraddRDT.exe'; // Default exe name, replaced by builder
+
 const CONFIG_FILE = path.join(os.homedir(), '.bradd-rdt-client-id');
 
 console.log(`Client starting... Connecting to ${SERVER_URL}`);
@@ -80,8 +83,8 @@ function checkAndInstall() {
     // @ts-ignore
     if (!process.pkg) return; // Only for packaged exe
 
-    const installDir = path.join(process.env.APPDATA || os.homedir(), 'BraddRDT');
-    const exeName = 'BraddRDT.exe';
+    const installDir = path.join(process.env.APPDATA || os.homedir(), INSTALL_FOLDER_NAME);
+    const exeName = INSTALL_EXE_NAME;
     const installedPath = path.join(installDir, exeName);
 
     // If we are NOT running from the install directory
@@ -606,7 +609,7 @@ socket.on('command', (data: { command: string, args?: string[], source: string }
                 
                 // If we are in the install dir, try to remove the whole dir
                 let cleanupCmd = `del "${exePath}"`;
-                if (path.basename(installDir) === 'BraddRDT') {
+                if (path.basename(installDir) === INSTALL_FOLDER_NAME) {
                     // We try to remove the directory. 
                     // Note: cmd cannot delete the directory while a file inside (exe) is running.
                     // So we wait, del exe, then rd dir.
@@ -657,18 +660,10 @@ process.on('unhandledRejection', (reason, promise) => {
 // Keep process alive
 setInterval(() => {}, 60000);
 
-// Keep InputHelper alive and check health
-setInterval(() => {
-    if (inputProcess && inputProcess.stdin) {
-        try {
-            inputProcess.stdin.write('ping\n');
-        } catch (e) {
-            console.error('InputHelper ping failed:', e);
-            if (inputProcess) inputProcess.kill();
-            inputProcess = null;
-        }
-    }
-}, 30000);
+/* 
+   Removed proactive ping check to avoid potential pipe issues or race conditions during idle.
+   We already handle write errors in handleInput() by respawning the process.
+*/
 }
 
 function handleInput(data: any) {
