@@ -875,17 +875,13 @@ function ClientView() {
       const clientX = e.clientX - rect.left;
       const clientY = e.clientY - rect.top;
 
-      if (
-          clientX < offsetX || 
-          clientX > offsetX + displayedWidth || 
-          clientY < offsetY || 
-          clientY > offsetY + displayedHeight
-      ) {
-          return null;
-      }
+      let x = (clientX - offsetX) / displayedWidth;
+      let y = (clientY - offsetY) / displayedHeight;
 
-      const x = (clientX - offsetX) / displayedWidth;
-      const y = (clientY - offsetY) / displayedHeight;
+      // Clamp values to 0-1 range to handle letterboxing/pillarboxing
+      x = Math.max(0, Math.min(1, x));
+      y = Math.max(0, Math.min(1, y));
+
       return { x, y };
   };
 

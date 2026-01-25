@@ -407,13 +407,33 @@ socket.on('term-input', (data) => {
     // console.log('Term input received:', JSON.stringify(data));
     if (shellProcess && shellProcess.stdin) {
         try {
-            // Fix: PowerShell/CMD often needs \r\n to trigger execution if \r is sent
-            // If data is just \r, convert to \r\n. 
-            // Or generic replacement of \r with \r\n for Windows shells if raw mode isn't fully set.
-            if (data === '\r') {
-                shellProcess.stdin.write('\r\n');
-            } else {
-                shellProcess.stdin.write(data);
+            let inputToWrite = data;
+            
+            // Backspace mapping (DEL -> BS)
+            if (inputToWrite === '\x7f') {
+                inputToWrite = '\x08';
+            }
+
+            // Enter mapping (CR -> CR LF)
+            if (inputToWrite === '\r') {
+                inputToWrite = '\r\n';
+            }
+
+            shellProcess.stdin.write(inputToWrite);
+
+            // Manual Echo for Windows (since pipes usually don't echo)
+            if (process.platform === 'win32') {
+                // If backspace, we simulate backspace echo
+                if (inputToWrite === '\x08') {
+                    // Send Backspace - Space - Backspace to erase character visually
+                    socket.emit('term-data', '\b \b');
+                } else if (inputToWrite === '\r\n') {
+                    // Echo newline
+                    socket.emit('term-data', '\r\n');
+                } else {
+                    // Echo normal character
+                    socket.emit('term-data', inputToWrite);
+                }
             }
         } catch (e) {
             console.error('Write to shell failed:', e);
@@ -614,15 +634,14 @@ function handleInput(data: any) {
     }
 
     if (args.length > 0) {
-        // spawn(inputHelperPath, args);
         ensureInputProcess();
         if (inputProcess && inputProcess.stdin) {
-            const commandLine = args.join(' ') + '\n';
+            const commandLine = args.join(' ') + '\r\n';
+            // console.log('Sending to InputHelper:', commandLine.trim());
             try {
                 inputProcess.stdin.write(commandLine);
             } catch (e) {
                 console.error('Error writing to InputHelper stdin:', e);
-                // Try restarting
                 inputProcess.kill();
                 inputProcess = null;
             }
