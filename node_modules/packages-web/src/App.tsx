@@ -970,6 +970,18 @@ function ClientView() {
              >
                 &gt;_ Shell
              </button>
+             <button 
+                className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded border border-gray-600"
+                onClick={() => setShowSysInfo(true)}
+             >
+                ℹ Info
+             </button>
+             <button 
+                className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded border border-gray-600"
+                onClick={() => setShowFileManager(true)}
+             >
+                📁 Files
+             </button>
              <span className={`w-3 h-3 rounded-full ${loading ? 'bg-red-500' : 'bg-green-500'}`} title={loading ? 'Disconnected/Loading' : 'Connected'} />
           </div>
       </div>
