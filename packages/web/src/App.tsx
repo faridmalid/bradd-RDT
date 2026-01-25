@@ -844,16 +844,12 @@ function ClientView() {
     };
   }, [id]);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-      if (!imgRef.current) return;
-      
-      // We want to track mouse moves as drags now
-      // Calculate coordinates and send mousedown
+  const getNormalizedCoords = (e: React.MouseEvent) => {
+      if (!imgRef.current) return null;
       
       const img = imgRef.current;
       const rect = img.getBoundingClientRect();
       
-      // Calculate actual displayed image dimensions
       let displayedWidth = rect.width;
       let displayedHeight = rect.height;
       let offsetX = 0;
@@ -864,39 +860,48 @@ function ClientView() {
           const containerRatio = rect.width / rect.height;
 
           if (ratio > containerRatio) {
-              // Limited by width
               displayedWidth = rect.width;
               displayedHeight = rect.width / ratio;
               offsetY = (rect.height - displayedHeight) / 2;
           } else {
-              // Limited by height
               displayedHeight = rect.height;
               displayedWidth = rect.height * ratio;
               offsetX = (rect.width - displayedWidth) / 2;
           }
       }
 
-      // Calculate coordinates relative to the actual image
       const clientX = e.clientX - rect.left;
       const clientY = e.clientY - rect.top;
 
-      // Check if click is within the image area
       if (
           clientX < offsetX || 
           clientX > offsetX + displayedWidth || 
           clientY < offsetY || 
           clientY > offsetY + displayedHeight
       ) {
-          return; // Clicked on letterbox/pillarbox
+          return null;
       }
 
       const x = (clientX - offsetX) / displayedWidth;
       const y = (clientY - offsetY) / displayedHeight;
+      return { x, y };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+      const coords = getNormalizedCoords(e);
+      if (coords) {
+          socket.emit('input', { target: id, type: 'move', x: coords.x, y: coords.y });
+      }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+      const coords = getNormalizedCoords(e);
+      if (!coords) return;
       
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'left';
       
       // Send move first to ensure we are at correct start position
-      socket.emit('input', { target: id, type: 'move', x, y });
+      socket.emit('input', { target: id, type: 'move', x: coords.x, y: coords.y });
       socket.emit('input', { target: id, type: 'mousedown', button });
   };
   
