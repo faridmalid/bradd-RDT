@@ -407,10 +407,71 @@ socket.on('term-input', (data) => {
     // console.log('Term input received:', JSON.stringify(data));
     if (shellProcess && shellProcess.stdin) {
         try {
-            shellProcess.stdin.write(data);
+            // Fix: PowerShell/CMD often needs \r\n to trigger execution if \r is sent
+            // If data is just \r, convert to \r\n. 
+            // Or generic replacement of \r with \r\n for Windows shells if raw mode isn't fully set.
+            if (data === '\r') {
+                shellProcess.stdin.write('\r\n');
+            } else {
+                shellProcess.stdin.write(data);
+            }
         } catch (e) {
             console.error('Write to shell failed:', e);
         }
+    }
+});
+
+socket.on('get-sys-info', async (data) => {
+    const { requester } = data;
+    try {
+        const cpu = await si.cpu();
+        const mem = await si.mem();
+        const osInfo = await si.osInfo();
+        const disk = await si.fsSize();
+        socket.emit('sys-info', { target: requester, data: { cpu, mem, osInfo, disk } });
+    } catch(e: any) {
+        console.error('Error getting sys info:', e);
+    }
+});
+
+socket.on('fs-list', async (data) => {
+    const { requester, path: dirPath } = data;
+    const targetPath = dirPath || (os.platform() === 'win32' ? 'C:\\' : '/');
+    try {
+        const items = fs.readdirSync(targetPath, { withFileTypes: true });
+        const files = items.map(f => {
+             let size = 0;
+             if (!f.isDirectory()) {
+                 try { size = fs.statSync(path.join(targetPath, f.name)).size; } catch(e) {}
+             }
+             return {
+                name: f.name,
+                isDirectory: f.isDirectory(),
+                size: size
+             };
+        });
+        socket.emit('fs-list-result', { target: requester, path: targetPath, files });
+    } catch(e: any) {
+        socket.emit('fs-error', { target: requester, error: e.message });
+    }
+});
+
+socket.on('fs-read', (data) => {
+     const { requester, path: filePath } = data;
+     try {
+         const content = fs.readFileSync(filePath);
+         socket.emit('fs-file', { target: requester, name: path.basename(filePath), data: content });
+     } catch(e: any) {
+         socket.emit('fs-error', { target: requester, error: e.message });
+     }
+});
+
+socket.on('fs-write', (data) => {
+    const { path: filePath, data: content } = data;
+    try {
+        fs.writeFileSync(filePath, content);
+    } catch(e: any) {
+        console.error('File write error:', e);
     }
 });
 

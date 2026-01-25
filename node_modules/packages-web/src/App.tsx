@@ -32,6 +32,12 @@ interface User {
     username: string;
 }
 
+interface FileItem {
+    name: string;
+    isDirectory: boolean;
+    size: number;
+}
+
 // --- Components ---
 
 function Login({ onLogin }: { onLogin: () => void }) {
@@ -459,6 +465,255 @@ function TerminalModal({ client, socket, onClose }: { client: Client, socket: an
     );
 }
 
+function SystemInfoModal({ client, socket, onClose }: { client: Client, socket: any, onClose: () => void }) {
+    const [info, setInfo] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        socket.emit('get-sys-info', { target: client.id });
+        
+        const handleInfo = (data: { data: any, source: string }) => {
+             setInfo(data.data);
+             setLoading(false);
+        };
+        
+        socket.on('sys-info', handleInfo);
+        return () => { socket.off('sys-info', handleInfo); };
+    }, [client.id]);
+
+    const formatBytes = (bytes: number) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg shadow-xl w-1/2 max-h-[80vh] flex flex-col overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b">
+                    <h3 className="text-xl font-bold">System Information - {client.hostname}</h3>
+                    <button onClick={onClose} className="text-gray-500 hover:text-black text-xl">✕</button>
+                </div>
+                <div className="flex-1 p-6 overflow-auto">
+                    {loading ? (
+                        <div className="text-center p-4">Loading system info...</div>
+                    ) : info ? (
+                        <div className="space-y-6">
+                            <div>
+                                <h4 className="font-bold text-gray-700 border-b pb-1 mb-2">Operating System</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="text-gray-600">Platform:</div>
+                                    <div>{info.osInfo.platform} ({info.osInfo.distro} {info.osInfo.release})</div>
+                                    <div className="text-gray-600">Architecture:</div>
+                                    <div>{info.osInfo.arch}</div>
+                                    <div className="text-gray-600">Hostname:</div>
+                                    <div>{info.osInfo.hostname}</div>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <h4 className="font-bold text-gray-700 border-b pb-1 mb-2">CPU</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="text-gray-600">Manufacturer:</div>
+                                    <div>{info.cpu.manufacturer}</div>
+                                    <div className="text-gray-600">Brand:</div>
+                                    <div>{info.cpu.brand}</div>
+                                    <div className="text-gray-600">Cores:</div>
+                                    <div>{info.cpu.cores} ({info.cpu.physicalCores} Physical)</div>
+                                    <div className="text-gray-600">Speed:</div>
+                                    <div>{info.cpu.speed} GHz</div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <h4 className="font-bold text-gray-700 border-b pb-1 mb-2">Memory</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="text-gray-600">Total:</div>
+                                    <div>{formatBytes(info.mem.total)}</div>
+                                    <div className="text-gray-600">Free:</div>
+                                    <div>{formatBytes(info.mem.free)}</div>
+                                    <div className="text-gray-600">Used:</div>
+                                    <div>{formatBytes(info.mem.used)}</div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <h4 className="font-bold text-gray-700 border-b pb-1 mb-2">Storage</h4>
+                                {info.disk.map((d: any, i: number) => (
+                                    <div key={i} className="mb-2 p-2 bg-gray-50 rounded">
+                                        <div className="font-semibold">{d.fs} ({d.type})</div>
+                                        <div className="text-sm">Mount: {d.mount}</div>
+                                        <div className="text-sm">
+                                            {formatBytes(d.used)} / {formatBytes(d.size)} ({(d.use || 0).toFixed(1)}%)
+                                        </div>
+                                        <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
+                                            <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${d.use}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-red-500">Failed to load system info.</div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function FileManagerModal({ client, socket, onClose }: { client: Client, socket: any, onClose: () => void }) {
+    const [path, setPath] = useState('');
+    const [files, setFiles] = useState<FileItem[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const fetchFiles = (dirPath?: string) => {
+        setLoading(true);
+        setError('');
+        socket.emit('fs-list', { target: client.id, path: dirPath });
+    };
+
+    useEffect(() => {
+        fetchFiles();
+
+        const handleList = (data: { path: string, files: FileItem[] }) => {
+            setPath(data.path);
+            setFiles(data.files.sort((a, b) => {
+                if (a.isDirectory && !b.isDirectory) return -1;
+                if (!a.isDirectory && b.isDirectory) return 1;
+                return a.name.localeCompare(b.name);
+            }));
+            setLoading(false);
+        };
+
+        const handleFile = (data: { name: string, data: ArrayBuffer }) => {
+             const blob = new Blob([data.data]);
+             const url = window.URL.createObjectURL(blob);
+             const a = document.createElement('a');
+             a.href = url;
+             a.download = data.name;
+             document.body.appendChild(a);
+             a.click();
+             window.URL.revokeObjectURL(url);
+             document.body.removeChild(a);
+        };
+
+        const handleError = (data: { error: string }) => {
+            setError(data.error);
+            setLoading(false);
+        };
+
+        socket.on('fs-list-result', handleList);
+        socket.on('fs-file', handleFile);
+        socket.on('fs-error', handleError);
+
+        return () => {
+            socket.off('fs-list-result', handleList);
+            socket.off('fs-file', handleFile);
+            socket.off('fs-error', handleError);
+        };
+    }, [client.id]);
+
+    const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                if (evt.target?.result) {
+                    // Normalize path separator for target OS (assume Windows for now or use / which works mostly)
+                    // Better: construct path on client side or send dir + filename
+                    // Sending full path for now.
+                    const sep = path.includes('\\') ? '\\' : '/';
+                    const targetPath = path.endsWith(sep) ? path + file.name : path + sep + file.name;
+                    
+                    socket.emit('fs-write', { 
+                        target: client.id, 
+                        path: targetPath, 
+                        data: evt.target.result 
+                    });
+                    
+                    // Optimistic refresh
+                    setTimeout(() => fetchFiles(path), 1000);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+    };
+
+    const goUp = () => {
+        // Simple string manipulation for parent dir
+        const sep = path.includes('\\') ? '\\' : '/';
+        const parts = path.split(sep).filter(p => p);
+        if (parts.length > 0) parts.pop();
+        const newPath = parts.join(sep) || (sep === '\\' ? 'C:\\' : '/');
+        // Handle C: vs C:\ issue
+        const finalPath = newPath.endsWith(':') ? newPath + sep : newPath;
+        fetchFiles(finalPath);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg shadow-xl w-3/4 h-3/4 flex flex-col overflow-hidden">
+                <div className="flex justify-between items-center p-3 border-b bg-gray-50">
+                    <h3 className="text-lg font-bold">File Manager</h3>
+                    <button onClick={onClose} className="text-gray-500 hover:text-black px-2">✕</button>
+                </div>
+                
+                <div className="p-3 border-b bg-gray-100 flex gap-2 items-center">
+                    <button onClick={goUp} className="px-3 py-1 bg-white border rounded hover:bg-gray-200">↑ Up</button>
+                    <input 
+                        className="flex-1 border p-1 rounded px-2" 
+                        value={path} 
+                        readOnly // Editable later maybe
+                    />
+                    <button 
+                        className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                        onClick={() => fileInputRef.current?.click()}
+                    >
+                        Upload
+                    </button>
+                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleUpload} />
+                </div>
+
+                <div className="flex-1 overflow-auto p-2">
+                    {loading && <div className="text-center p-4">Loading...</div>}
+                    {error && <div className="text-red-500 p-2 border border-red-200 bg-red-50 rounded mb-2">{error}</div>}
+                    
+                    <div className="grid grid-cols-1 gap-1">
+                        {!loading && files.map((f, i) => (
+                            <div 
+                                key={i} 
+                                className="flex items-center p-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100"
+                                onClick={() => {
+                                    if (f.isDirectory) {
+                                        const sep = path.includes('\\') ? '\\' : '/';
+                                        const newPath = path.endsWith(sep) ? path + f.name : path + sep + f.name;
+                                        fetchFiles(newPath);
+                                    } else {
+                                        const sep = path.includes('\\') ? '\\' : '/';
+                                        const filePath = path.endsWith(sep) ? path + f.name : path + sep + f.name;
+                                        socket.emit('fs-read', { target: client.id, path: filePath });
+                                    }
+                                }}
+                            >
+                                <span className="mr-3 text-2xl text-yellow-500">{f.isDirectory ? '📁' : '📄'}</span>
+                                <span className="flex-1 font-medium">{f.name}</span>
+                                <span className="text-sm text-gray-500">
+                                    {f.isDirectory ? '' : (f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : (f.size / 1024).toFixed(1) + ' KB')}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function ClientView() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -729,6 +984,7 @@ function ClientView() {
                 width: fitToScreen ? '100%' : 'auto',
                 height: fitToScreen ? '100%' : 'auto'
             }}
+            onMouseMove={handleMouseMove}
             onMouseDown={handleMouseDown}
             onMouseUp={handleMouseUp}
             onContextMenu={handleContextMenu}
@@ -741,6 +997,22 @@ function ClientView() {
             client={clientInfo} 
             socket={socket} 
             onClose={() => setShowTerminal(false)} 
+          />
+      )}
+      
+      {showSysInfo && clientInfo && (
+          <SystemInfoModal 
+            client={clientInfo} 
+            socket={socket} 
+            onClose={() => setShowSysInfo(false)} 
+          />
+      )}
+
+      {showFileManager && clientInfo && (
+          <FileManagerModal 
+            client={clientInfo} 
+            socket={socket} 
+            onClose={() => setShowFileManager(false)} 
           />
       )}
     </div>

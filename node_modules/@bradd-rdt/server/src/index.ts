@@ -367,6 +367,46 @@ io.on('connection', (socket) => {
       }
   });
 
+  // --- Feature Relays ---
+  
+  // System Info
+  socket.on('get-sys-info', (data: { target: string }) => {
+      const targetSocket = clientSocketMap[data.target];
+      if (targetSocket) io.to(targetSocket).emit('get-sys-info', { requester: socket.id });
+  });
+  
+  socket.on('sys-info', (data: { target: string, data: any }) => {
+      io.to(data.target).emit('sys-info', { data: data.data, source: socket.id });
+  });
+
+  // File Manager
+  socket.on('fs-list', (data: { target: string, path?: string }) => {
+      const targetSocket = clientSocketMap[data.target];
+      if (targetSocket) io.to(targetSocket).emit('fs-list', { requester: socket.id, path: data.path });
+  });
+
+  socket.on('fs-list-result', (data: { target: string, path: string, files: any[] }) => {
+      io.to(data.target).emit('fs-list-result', { path: data.path, files: data.files });
+  });
+
+  socket.on('fs-read', (data: { target: string, path: string }) => {
+      const targetSocket = clientSocketMap[data.target];
+      if (targetSocket) io.to(targetSocket).emit('fs-read', { requester: socket.id, path: data.path });
+  });
+
+  socket.on('fs-file', (data: { target: string, name: string, data: any }) => {
+      io.to(data.target).emit('fs-file', { name: data.name, data: data.data });
+  });
+
+  socket.on('fs-write', (data: { target: string, path: string, data: any }) => {
+      const targetSocket = clientSocketMap[data.target];
+      if (targetSocket) io.to(targetSocket).emit('fs-write', { path: data.path, data: data.data });
+  });
+  
+  socket.on('fs-error', (data: { target: string, error: string }) => {
+      io.to(data.target).emit('fs-error', { error: data.error });
+  });
+
 
 });
 
