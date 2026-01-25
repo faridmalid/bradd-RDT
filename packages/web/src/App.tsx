@@ -721,6 +721,8 @@ function ClientView() {
   const [loading, setLoading] = useState(true);
   const [fitToScreen, setFitToScreen] = useState(true);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [showSysInfo, setShowSysInfo] = useState(false);
+  const [showFileManager, setShowFileManager] = useState(false);
   const [clientInfo, setClientInfo] = useState<Client | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
