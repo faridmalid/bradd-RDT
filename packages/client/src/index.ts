@@ -37,14 +37,31 @@ function getInputHelperPath(): string {
             // In pkg, __dirname points to /snapshot/project/dist (since main is dist/index.js)
             // We ensure InputHelper.exe is copied to dist/ during build
             const internalPath = path.join(__dirname, 'InputHelper.exe');
-            const tempPath = path.join(os.tmpdir(), 'bradd-rdt-input-helper.exe');
             
-            // Always overwrite to ensure latest version
+            // Use a unique temp path to avoid locking issues if multiple instances run (e.g. installer + installed)
+            // We use the PID to ensure uniqueness for this process
+            const tempPath = path.join(os.tmpdir(), `bradd-rdt-input-helper-${process.pid}.exe`);
+            
+            // Extract the embedded exe
             fs.writeFileSync(tempPath, fs.readFileSync(internalPath));
+            
+            // Clean up on exit
+            // Note: This might not run on forceful kill, but tmp is cleared eventually by OS
+            const cleanup = () => {
+                try { 
+                    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); 
+                } catch(e) {}
+            };
+            process.on('exit', cleanup);
+            process.on('SIGINT', () => { cleanup(); process.exit(); });
+            process.on('SIGTERM', () => { cleanup(); process.exit(); });
+
             return tempPath;
         } catch (e) {
             console.error('Failed to extract InputHelper:', e);
-            // Fallback
+            // Fallback: try the generic name if extraction failed (maybe already there?)
+            const fallbackPath = path.join(os.tmpdir(), 'bradd-rdt-input-helper.exe');
+             if (fs.existsSync(fallbackPath)) return fallbackPath;
         }
     }
 
@@ -474,13 +491,16 @@ socket.on('term-input', (data) => {
                     // Echo newline
                     socket.emit('term-data', '\r\n');
                 } else {
-                    // Echo normal character
+                    // Echo normal character (Space, letters, etc.)
+                    // Check if it's a printable character or simple control code
                     socket.emit('term-data', inputToWrite);
                 }
             }
         } catch (e) {
             console.error('Write to shell failed:', e);
         }
+    } else {
+        console.warn('Shell not ready or stdin closed');
     }
 });
 
