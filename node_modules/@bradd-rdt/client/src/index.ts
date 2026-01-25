@@ -58,8 +58,51 @@ function getInputHelperPath(): string {
     return 'InputHelper.exe';
 }
 
+// Self-Install Logic
+function checkAndInstall() {
+    // @ts-ignore
+    if (!process.pkg) return; // Only for packaged exe
+
+    const installDir = path.join(process.env.APPDATA || os.homedir(), 'BraddRDT');
+    const exeName = 'BraddRDT.exe';
+    const installedPath = path.join(installDir, exeName);
+
+    // If we are NOT running from the install directory
+    if (path.dirname(process.execPath).toLowerCase() !== installDir.toLowerCase()) {
+        console.log('Running from temporary location. Installing to:', installDir);
+        
+        try {
+            if (!fs.existsSync(installDir)) {
+                fs.mkdirSync(installDir, { recursive: true });
+            }
+
+            // Copy self to install dir
+            fs.copyFileSync(process.execPath, installedPath);
+
+            console.log('Installation successful. Relaunching from install dir...');
+
+            // Spawn the installed executable
+            const child = spawn(installedPath, [], { 
+                detached: true, 
+                stdio: 'ignore' 
+            });
+            child.unref();
+
+            // Exit this process (the installer)
+            process.exit(0);
+        } catch (e) {
+            console.error('Installation failed:', e);
+            // If install fails, continue running? Or exit?
+            // Continue running allows troubleshooting or portable use if permission denied.
+        }
+    }
+}
+
 let inputHelperPath = getInputHelperPath();
 console.log(`Input Helper Path: ${inputHelperPath}`);
+
+// Run install check immediately
+checkAndInstall();
 
 // Persistent InputHelper Process
 let inputProcess: ChildProcess | null = null;
@@ -509,9 +552,20 @@ socket.on('command', (data: { command: string, args?: string[], source: string }
             if (inputProcess) inputProcess.kill();
             if (shellProcess) shellProcess.kill();
 
-            // Remove Autorun
+            // Remove Autorun (Registry - Legacy)
             if (process.platform === 'win32') {
                  exec('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "BraddRDTClient" /f', () => {});
+            }
+
+            // Remove Autorun (Startup Folder)
+            try {
+                const startupFolder = path.join(os.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+                const shortcutPath = path.join(startupFolder, 'BraddRDTClient.bat');
+                if (fs.existsSync(shortcutPath)) {
+                    fs.unlinkSync(shortcutPath);
+                }
+            } catch (e) {
+                console.error('Failed to remove startup shortcut:', e);
             }
 
             // Delete Config
@@ -528,11 +582,25 @@ socket.on('command', (data: { command: string, args?: string[], source: string }
             if (process.pkg) {
                 const scriptPath = path.join(os.tmpdir(), 'cleanup.bat');
                 const exePath = process.execPath;
+                const installDir = path.dirname(exePath);
                 
+                // If we are in the install dir, try to remove the whole dir
+                let cleanupCmd = `del "${exePath}"`;
+                if (path.basename(installDir) === 'BraddRDT') {
+                    // We try to remove the directory. 
+                    // Note: cmd cannot delete the directory while a file inside (exe) is running.
+                    // So we wait, del exe, then rd dir.
+                    cleanupCmd = `
+del "${exePath}"
+cd ..
+rmdir /s /q "${installDir}"
+`;
+                }
+
                 const scriptContent = `
 @echo off
-timeout /t 2 /nobreak > NUL
-del "${exePath}"
+timeout /t 3 /nobreak > NUL
+${cleanupCmd}
 del "%~f0"
 `;
                 fs.writeFileSync(scriptPath, scriptContent);

